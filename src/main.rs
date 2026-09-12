@@ -1,4 +1,4 @@
-//! Entry point for the Cargo Wrapper dependency-audit middleware plugin.
+//! Entry point for the Cargo Wrapper supply-chain-guard middleware plugin.
 //! It validates protocol v1, reviews dependency changes, and calls the next stage only when allowed.
 
 use std::env;
@@ -7,25 +7,30 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cargo_wrapper_dependency_audit::approvals::ApprovalStore;
-use cargo_wrapper_dependency_audit::candidate::{
+use cargo_wrapper_supply_chain_guard::approvals::ApprovalStore;
+use cargo_wrapper_supply_chain_guard::candidate::{
     WorkspaceSnapshot, locks_match, resolve_candidate,
 };
-use cargo_wrapper_dependency_audit::command_policy::{
+use cargo_wrapper_supply_chain_guard::command_policy::{
     CommandPolicy, INSTALL_RISK_ACCEPTANCE_FLAG, add_locked, blocked_message, classify_hosted,
     manifest_path,
 };
-use cargo_wrapper_dependency_audit::factory_approvals::FactoryBundle;
-use cargo_wrapper_dependency_audit::lockfile::CargoLock;
-use cargo_wrapper_dependency_audit::prompt::{
+use cargo_wrapper_supply_chain_guard::config::PluginConfig;
+use cargo_wrapper_supply_chain_guard::factory_approvals::FactoryBundle;
+use cargo_wrapper_supply_chain_guard::lockfile::CargoLock;
+use cargo_wrapper_supply_chain_guard::prompt::{
     BatchDecisionProvider, Decision, DecisionProvider, InteractivePrompt,
 };
-use cargo_wrapper_dependency_audit::protocol::{self, ProtocolContext};
-use cargo_wrapper_dependency_audit::registry::HttpRegistryClient;
-use cargo_wrapper_dependency_audit::scanner::SCANNER_VERSION;
-use cargo_wrapper_dependency_audit::security::SecurityGate;
-use cargo_wrapper_dependency_audit::workspace::{Workspace, project_root};
-use cargo_wrapper_dependency_audit::{Result as AuditResult, error};
+use cargo_wrapper_supply_chain_guard::protocol::{self, ProtocolContext};
+use cargo_wrapper_supply_chain_guard::registry::HttpRegistryClient;
+use cargo_wrapper_supply_chain_guard::scanner::SCANNER_VERSION;
+use cargo_wrapper_supply_chain_guard::security::SecurityGate;
+use cargo_wrapper_supply_chain_guard::vet::VetService;
+use cargo_wrapper_supply_chain_guard::vet_baseline;
+use cargo_wrapper_supply_chain_guard::vet_live;
+use cargo_wrapper_supply_chain_guard::vet_project;
+use cargo_wrapper_supply_chain_guard::workspace::{Workspace, project_root};
+use cargo_wrapper_supply_chain_guard::{Result as AuditResult, error};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReviewMode {
@@ -67,7 +72,7 @@ fn extract_review_mode(args: &mut Vec<String>) -> AuditResult<ReviewMode> {
         if let Some(mode) = mode {
             if selected.replace(mode).is_some() {
                 return Err(error(
-                    "dependency-audit: specify exactly one batch review option: --dump-audit-prompt, --accept-all-once, or --accept-and-remember-all",
+                    "supply-chain-guard: specify exactly one batch review option: --dump-audit-prompt, --accept-all-once, or --accept-and-remember-all",
                 ));
             }
         } else {
@@ -90,7 +95,7 @@ fn extract_install_risk_acceptance(args: &mut Vec<String>) -> AuditResult<bool> 
         if index < option_end && argument == INSTALL_RISK_ACCEPTANCE_FLAG {
             if accepted {
                 return Err(error(format!(
-                    "dependency-audit: specify {INSTALL_RISK_ACCEPTANCE_FLAG} only once"
+                    "supply-chain-guard: specify {INSTALL_RISK_ACCEPTANCE_FLAG} only once"
                 )));
             }
             accepted = true;
@@ -105,10 +110,10 @@ fn extract_install_risk_acceptance(args: &mut Vec<String>) -> AuditResult<bool> 
 fn announce_unreviewed_install_bypass() {
     eprintln!(
         "============================================================\n\
-         DEPENDENCY AUDIT BYPASS: UNREVIEWED CARGO INSTALL\n\
+         SUPPLY CHAIN GUARD BYPASS: UNREVIEWED CARGO INSTALL\n\
          ============================================================\n\n\
          The requested package and its transitive dependency graph were not\n\
-         reviewed by Dependency Audit. Build scripts and procedural macros may\n\
+         reviewed by Supply Chain Guard. Build scripts and procedural macros may\n\
          execute with your user privileges. Proceeding only because\n\
          {INSTALL_RISK_ACCEPTANCE_FLAG} was explicitly provided.\n"
     );
@@ -180,15 +185,34 @@ fn write_audit_prompt_report(cwd: &Path, report: &str) -> AuditResult<PathBuf> {
         }
     }
     Err(error(
-        "dependency-audit: could not allocate a unique timestamped audit-prompt filename",
+        "supply-chain-guard: could not allocate a unique timestamped audit-prompt filename",
     ))
 }
 
-fn finish_audit_dump(cwd: &Path, reviews: &BatchDecisionProvider) -> AuditResult<i32> {
+fn handle_audit_dump(cwd: &Path, reviews: &BatchDecisionProvider) -> AuditResult<Option<i32>> {
+    if reviews.review_count() == 0 {
+        println!("Supply Chain Guard found 0 artifacts requiring LLM review.");
+        if reviews.external_evidence_count() > 0 {
+            println!(
+                "cargo-vet covered {} static-review candidate{}:",
+                reviews.external_evidence_count(),
+                if reviews.external_evidence_count() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+        } else {
+            println!("Existing exact trust state covered the resolved dependency graph.");
+        }
+        println!("No audit prompt was created. Continuing the requested Cargo operation.");
+        return Ok(None);
+    }
+
     let path = write_audit_prompt_report(cwd, &reviews.audit_prompt_markdown())?;
     let absolute_path = path.canonicalize().unwrap_or(path);
     println!(
-        "Dependency Audit created an audit prompt for {} unapproved artifact{} at:\n{}",
+        "Supply Chain Guard created an audit prompt for {} unapproved artifact{} at:\n{}",
         reviews.review_count(),
         if reviews.review_count() == 1 { "" } else { "s" },
         absolute_path.display()
@@ -198,14 +222,14 @@ fn finish_audit_dump(cwd: &Path, reviews: &BatchDecisionProvider) -> AuditResult
         absolute_path.display()
     );
     println!("\nThe requested Cargo operation was not run.");
-    Ok(0)
+    Ok(Some(0))
 }
 
 fn announce_batch_acceptance(mode: ReviewMode, reviews: &BatchDecisionProvider) {
     match mode {
         ReviewMode::AcceptAllOnce => {
             eprintln!(
-                "dependency-audit: explicitly accepting all findings for {} currently resolved unapproved artifact{} once:",
+                "supply-chain-guard: explicitly accepting all findings for {} currently resolved unapproved artifact{} once:",
                 reviews.review_count(),
                 if reviews.review_count() == 1 { "" } else { "s" }
             );
@@ -214,11 +238,22 @@ fn announce_batch_acceptance(mode: ReviewMode, reviews: &BatchDecisionProvider) 
         }
         ReviewMode::AcceptAndRememberAll => {
             eprintln!(
-                "dependency-audit: explicitly accepting and remembering all findings for {} currently resolved exact artifact{}:",
+                "supply-chain-guard: explicitly accepting and remembering all findings for {} currently resolved exact artifact{}:",
                 reviews.review_count(),
                 if reviews.review_count() == 1 { "" } else { "s" }
             );
             eprint!("{}", reviews.artifact_summary());
+            if reviews.external_evidence_count() > 0 {
+                eprintln!(
+                    "also remembering {} cargo-vet-covered exact artifact{} listed above",
+                    reviews.external_evidence_count(),
+                    if reviews.external_evidence_count() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+            }
             eprintln!("checksum and inspection failures remain non-overridable");
         }
         ReviewMode::Interactive | ReviewMode::DumpAuditPrompt => {}
@@ -226,7 +261,7 @@ fn announce_batch_acceptance(mode: ReviewMode, reviews: &BatchDecisionProvider) 
 }
 
 fn print_factory_bundle_summary(bundle: &FactoryBundle) {
-    println!("Dependency Audit trust bundle {}", bundle.bundle_version);
+    println!("Supply Chain Guard trust bundle {}", bundle.bundle_version);
     println!("Reviewed: {}", bundle.reviewed_at);
     println!("{}", bundle.description);
     println!("Exact artifact approvals: {}", bundle.approval_count());
@@ -266,7 +301,7 @@ fn manage_factory_bundle(arguments: &[String]) -> AuditResult<i32> {
         [action] if action == "install" => {
             print_factory_bundle_summary(&bundle);
             eprint!(
-                "\nRun `cargo dependency-audit trust-bundle show` to inspect every entry.\n\
+                "\nRun `cargo supply-chain-guard trust-bundle show` to inspect every entry.\n\
                  Installing this bundle trusts all {} exact artifacts and their listed findings\n\
                  without downloading and rescanning their source. Future versions or different\n\
                  checksums remain untrusted and will prompt normally.\n\n\
@@ -293,20 +328,165 @@ fn manage_factory_bundle(arguments: &[String]) -> AuditResult<i32> {
             Ok(0)
         }
         _ => Err(error(
-            "usage: cargo dependency-audit trust-bundle <show|install>",
+            "usage: cargo supply-chain-guard trust-bundle <show|install>",
         )),
     }
 }
 
-fn manage_plugin(arguments: &[String]) -> AuditResult<i32> {
+fn print_cargo_vet_status(real_cargo: &Path) -> AuditResult<()> {
+    let config = PluginConfig::load()?;
+    let service = VetService::new(config.cargo_vet_mode, real_cargo.to_path_buf());
+    println!("cargo-vet mode: {}", service.mode().label());
+    println!("Configuration: {}", config.path.display());
+    println!("Embedded recovery policy: {}", vet_baseline::BASELINE_ID);
+    match service.helper() {
+        Ok(helper) => {
+            println!("Helper: ready");
+            println!("Helper path: {}", helper.path.display());
+            println!("Helper expected SHA-256: {}", helper.expected_sha256);
+            println!("Helper actual SHA-256:   {}", helper.actual_sha256);
+            println!(
+                "Helper version: {}",
+                cargo_wrapper_supply_chain_guard::vet_helper::EXPECTED_VERSION
+            );
+        }
+        Err(reason) => {
+            println!("Helper: unavailable");
+            println!("Reason: {reason}");
+        }
+    }
+    let project = Workspace::discover(&env::current_dir()?)
+        .ok()
+        .map(|workspace| vet_project::discover(&workspace));
+    match &project {
+        Some(Ok(Some(project))) => {
+            println!("Project cargo-vet store: {}", project.store_path.display());
+            println!("Project policy fingerprint: {}", project.fingerprint);
+        }
+        Some(Ok(None)) => println!("Project cargo-vet store: not configured"),
+        Some(Err(project_error)) => {
+            println!("Project cargo-vet store: invalid ({project_error})")
+        }
+        None => println!("Project cargo-vet store: no locked workspace at current path"),
+    }
+    let cached = vet_live::load_cached_default_evidence()?;
+    println!(
+        "Default import cache: {}",
+        vet_live::default_evidence_dir()?.display()
+    );
+    match &cached {
+        Some(snapshot) => {
+            println!("Cached import snapshot: {}", snapshot.short_fingerprint());
+            println!(
+                "Snapshot fetched: {}",
+                format_utc_timestamp(snapshot.fetched_at_unix, 0)
+            );
+        }
+        None => println!("Cached import snapshot: not yet available"),
+    }
+    let selected_policy = match config.cargo_vet_mode {
+        cargo_wrapper_supply_chain_guard::config::VetMode::Off => "disabled",
+        cargo_wrapper_supply_chain_guard::config::VetMode::Curated => {
+            "live default cargo-vet imports"
+        }
+        cargo_wrapper_supply_chain_guard::config::VetMode::Project => match &project {
+            Some(Ok(Some(_))) => "project cargo-vet policy",
+            _ => "unavailable: project policy required",
+        },
+        cargo_wrapper_supply_chain_guard::config::VetMode::Auto
+        | cargo_wrapper_supply_chain_guard::config::VetMode::Required => match &project {
+            Some(Ok(Some(_))) => "project cargo-vet policy",
+            Some(Err(_)) => "unavailable: project policy invalid",
+            _ => "live default cargo-vet imports",
+        },
+    };
+    println!("Selected policy: {selected_policy}");
+    println!(
+        "Eligible evidence: full/delta safe-to-run paths only; exemptions, wildcard audits, and publisher trust cannot suppress review."
+    );
+    Ok(())
+}
+
+fn print_cargo_vet_sources() -> AuditResult<()> {
+    println!("Live default cargo-vet imports:");
+    let cached = vet_live::load_cached_default_evidence()?;
+    for definition in vet_live::DEFAULT_SOURCES {
+        println!("{} ({})", definition.display_name, definition.id);
+        println!("  URL: {}", definition.url);
+        if let Some(source) = cached.as_ref().and_then(|snapshot| {
+            snapshot
+                .sources
+                .iter()
+                .find(|source| source.id == definition.id)
+        }) {
+            println!("  cached source SHA-256: {}", source.source_sha256);
+        }
+    }
+    println!();
+    let provenance = vet_baseline::provenance()?;
+    println!("Embedded recovery policy: {}", provenance.baseline);
+    for source in provenance.sources {
+        println!("{} ({})", source.display_name, source.id);
+        println!("  repository: {}", source.repository);
+        println!("  commit:     {}", source.commit);
+        println!("  SHA-256:    {}", source.sha256);
+        println!("  full/delta entries: {}", source.retained_audits);
+    }
+    Ok(())
+}
+
+fn refresh_cargo_vet_sources(real_cargo: &Path) -> AuditResult<()> {
+    if vet_live::refresh_is_disabled() {
+        return Err(error(
+            "cargo-vet imports cannot be refreshed while CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_OFFLINE or CARGO_NET_OFFLINE is enabled",
+        ));
+    }
+    let config = PluginConfig::load()?;
+    let service = VetService::new(config.cargo_vet_mode, real_cargo.to_path_buf());
+    service
+        .helper()
+        .map_err(|reason| error(format!("cargo-vet helper is unavailable: {reason}")))?;
+    let snapshot = vet_live::refresh_default_evidence()?;
+    println!(
+        "Refreshed {} trusted cargo-vet imports.",
+        snapshot.sources.len()
+    );
+    println!("Snapshot: {}", snapshot.fingerprint);
+    println!(
+        "Fetched: {}",
+        format_utc_timestamp(snapshot.fetched_at_unix, 0)
+    );
+    println!("Cache: {}", vet_live::default_evidence_dir()?.display());
+    Ok(())
+}
+
+fn manage_cargo_vet(arguments: &[String], real_cargo: &Path) -> AuditResult<i32> {
+    match arguments {
+        [action] if action == "status" => print_cargo_vet_status(real_cargo).map(|()| 0),
+        [action] if action == "sources" => print_cargo_vet_sources().map(|()| 0),
+        [action] if action == "update" => refresh_cargo_vet_sources(real_cargo).map(|()| 0),
+        [action] if action == "explain-policy" => {
+            println!(
+                "Supply Chain Guard refreshes its selected default cargo-vet imports during online guarded operations and locks each validated snapshot in a plugin-owned cache. It then asks pinned cargo-vet 0.10.2 to prove an exact crate version satisfies safe-to-run through full/delta audits. The query temporarily exempts every other third-party artifact, never exempts any version of the target crate, and removes exemptions, wildcard audits, and publisher trust from eligible evidence. Project cargo-vet policy takes precedence in auto mode. A missing proof continues to static review; an online refresh failure uses the last validated snapshot or the embedded recovery baseline."
+            );
+            Ok(0)
+        }
+        _ => Err(error(
+            "usage: cargo supply-chain-guard cargo-vet <status|sources|update|explain-policy>",
+        )),
+    }
+}
+
+fn manage_plugin(arguments: &[String], real_cargo: &Path) -> AuditResult<i32> {
     if arguments.is_empty() {
         let path = ApprovalStore::default_path()?;
         let store = ApprovalStore::load(path.clone())?;
-        println!("Dependency Audit plugin is active.");
+        println!("Supply Chain Guard plugin is active.");
         println!("Plugin version: {}", env!("CARGO_PKG_VERSION"));
         println!("Protocol version: {}", protocol::PROTOCOL_VERSION);
         println!("Scanner version: {SCANNER_VERSION}");
         println!("Approval file: {}", path.display());
+        print_cargo_vet_status(real_cargo)?;
         if store.installed_factory_bundles().is_empty() {
             println!("Factory trust bundle: not installed");
         } else {
@@ -325,8 +505,11 @@ fn manage_plugin(arguments: &[String]) -> AuditResult<i32> {
     if arguments.first().is_some_and(|arg| arg == "trust-bundle") {
         return manage_factory_bundle(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|arg| arg == "cargo-vet") {
+        return manage_cargo_vet(&arguments[1..], real_cargo);
+    }
     Err(error(
-        "usage: cargo dependency-audit [trust-bundle <show|install>]",
+        "usage: cargo supply-chain-guard [trust-bundle <show|install> | cargo-vet <status|sources|update|explain-policy>]",
     ))
 }
 
@@ -348,31 +531,34 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         )
     {
         return Err(error(format!(
-            "dependency-audit: {INSTALL_RISK_ACCEPTANCE_FLAG} is valid only with `cargo forceinstall`"
+            "supply-chain-guard: {INSTALL_RISK_ACCEPTANCE_FLAG} is valid only with `cargo forceinstall`"
         )));
     }
 
     if install_risk_accepted && review_mode != ReviewMode::Interactive {
         return Err(error(
-            "dependency-audit: the unreviewed install-risk acceptance flag cannot be combined with batch audit options",
+            "supply-chain-guard: the unreviewed install-risk acceptance flag cannot be combined with batch audit options",
         ));
     }
 
     if let Some(invocation) = &invocation
-        && invocation.command == "dependency-audit"
+        && invocation.command == "supply-chain-guard"
     {
         if review_mode != ReviewMode::Interactive {
             return Err(error(
-                "dependency-audit: batch review options are not valid for plugin administration",
+                "supply-chain-guard: batch review options are not valid for plugin administration",
             ));
         }
-        return manage_plugin(&args[invocation.command_index + 1..]);
+        return manage_plugin(
+            &args[invocation.command_index + 1..],
+            protocol.direct_cargo.executable(),
+        );
     }
 
     let Some(invocation) = invocation else {
         if review_mode != ReviewMode::Interactive {
             return Err(error(
-                "dependency-audit: batch review options require a Cargo operation guarded by dependency review",
+                "supply-chain-guard: batch review options require a Cargo operation guarded by dependency review",
             ));
         }
         return run_downstream(&protocol, &args, &env::current_dir()?);
@@ -387,7 +573,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         }
         return Err(error(
             blocked_message(&invocation.command, &args, invocation.command_index)
-                .unwrap_or_else(|| "dependency-audit: Cargo installation is blocked".to_owned()),
+                .unwrap_or_else(|| "supply-chain-guard: Cargo installation is blocked".to_owned()),
         ));
     }
 
@@ -396,7 +582,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
     {
         return Err(error(
             blocked_message(&invocation.command, &args, invocation.command_index)
-                .unwrap_or_else(|| "dependency-audit: dependency mutation is blocked".to_owned()),
+                .unwrap_or_else(|| "supply-chain-guard: dependency mutation is blocked".to_owned()),
         ));
     }
     let guarded_operation = invocation.forced_command.is_some()
@@ -408,7 +594,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         );
     if review_mode != ReviewMode::Interactive && !guarded_operation {
         return Err(error(
-            "dependency-audit: batch review options are only valid for Cargo operations guarded by dependency review",
+            "supply-chain-guard: batch review options are only valid for Cargo operations guarded by dependency review",
         ));
     }
 
@@ -426,6 +612,11 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         let candidate_lock = candidate.lock()?;
         let mut store = ApprovalStore::load(ApprovalStore::default_path()?)?;
         let registry = HttpRegistryClient::default();
+        let config = PluginConfig::load()?;
+        let mut vet = VetService::new(
+            config.cargo_vet_mode,
+            protocol.direct_cargo.executable().to_path_buf(),
+        );
         let mut interactive = InteractivePrompt;
         let mut batch = BatchDecisionProvider::new(
             review_mode
@@ -442,11 +633,19 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
                 store: &mut store,
                 registry: &registry,
                 decisions,
+                evidence: Some(&mut vet),
             };
             gate.review_workspace(&candidate_workspace)?
         };
-        if review_mode == ReviewMode::DumpAuditPrompt {
-            return finish_audit_dump(&cwd, &batch);
+        if review_mode == ReviewMode::Interactive && outcome.fully_remembered {
+            eprintln!(
+                "Supply Chain Guard: every resolved exact artifact is already approved; no inspection or risk decision is required."
+            );
+        }
+        if review_mode == ReviewMode::DumpAuditPrompt
+            && let Some(status) = handle_audit_dump(&cwd, &batch)?
+        {
+            return Ok(status);
         }
         announce_batch_acceptance(review_mode, &batch);
 
@@ -458,7 +657,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         if !status.success() {
             snapshot.restore()?;
             return Err(error(format!(
-                "dependency-audit: final Cargo operation failed with {status}; original manifests and lockfile were restored"
+                "supply-chain-guard: final Cargo operation failed with {status}; original manifests and lockfile were restored"
             )));
         }
         let real_workspace = Workspace::discover(&workspace_start)?;
@@ -466,7 +665,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         if !locks_match(&candidate_lock, &real_lock)? {
             snapshot.restore()?;
             return Err(error(
-                "dependency-audit: final Cargo.lock differs from the reviewed candidate; original workspace files were restored and re-review is required",
+                "supply-chain-guard: final Cargo.lock differs from the reviewed candidate; original workspace files were restored and re-review is required",
             ));
         }
         if outcome.fully_remembered {
@@ -492,6 +691,11 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         let workspace = Workspace::discover(&workspace_start)?;
         let mut store = ApprovalStore::load(ApprovalStore::default_path()?)?;
         let registry = HttpRegistryClient::default();
+        let config = PluginConfig::load()?;
+        let mut vet = VetService::new(
+            config.cargo_vet_mode,
+            protocol.direct_cargo.executable().to_path_buf(),
+        );
         let mut interactive = InteractivePrompt;
         let mut batch = BatchDecisionProvider::new(
             review_mode
@@ -508,6 +712,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
                 store: &mut store,
                 registry: &registry,
                 decisions,
+                evidence: None,
             };
             gate.fast_path(&workspace)?
         };
@@ -523,11 +728,19 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
                     store: &mut store,
                     registry: &registry,
                     decisions,
+                    evidence: Some(&mut vet),
                 };
                 gate.review_workspace(&workspace)?
             };
-            if review_mode == ReviewMode::DumpAuditPrompt {
-                return finish_audit_dump(&cwd, &batch);
+            if review_mode == ReviewMode::Interactive && outcome.fully_remembered {
+                eprintln!(
+                    "Supply Chain Guard: every resolved exact artifact is already approved; no inspection or risk decision is required."
+                );
+            }
+            if review_mode == ReviewMode::DumpAuditPrompt
+                && let Some(status) = handle_audit_dump(&cwd, &batch)?
+            {
+                return Ok(status);
             }
             announce_batch_acceptance(review_mode, &batch);
             if outcome.fully_remembered {
@@ -543,13 +756,15 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
                 store.save()?;
             }
         } else if review_mode == ReviewMode::DumpAuditPrompt {
-            return finish_audit_dump(&cwd, &batch);
+            if let Some(status) = handle_audit_dump(&cwd, &batch)? {
+                return Ok(status);
+            }
         } else {
             announce_batch_acceptance(review_mode, &batch);
         }
         add_locked(&mut args, invocation.command_index);
-        if env::var_os("CARGO_WRAPPER_DEPENDENCY_AUDIT_VERBOSE").is_some() {
-            eprintln!("dependency-audit: approved trust state; enforcing --locked");
+        if env::var_os("CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERBOSE").is_some() {
+            eprintln!("supply-chain-guard: approved trust state; enforcing --locked");
         }
     }
 
@@ -558,7 +773,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
 
 fn direct_help() {
     println!(
-        "cargo-wrapper-plugin-dependency-audit {}\n\nThis binary is a Cargo Wrapper protocol-v1 plugin.\nInstall it with:\n  cargo wrapper plugin install dependency-audit <local-binary>\n  cargo wrapper plugin enable dependency-audit\n\nThen run:\n  cargo dependency-audit",
+        "cargo-wrapper-plugin-supply-chain-guard {}\n\nThis binary is a Cargo Wrapper protocol-v1 plugin.\nInstall it with:\n  cargo wrapper plugin install supply-chain-guard <local-binary>\n  cargo wrapper plugin enable supply-chain-guard\n\nThen run:\n  cargo supply-chain-guard",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -568,7 +783,7 @@ fn main() {
     if !protocol::is_host_invocation() {
         if direct_arguments.as_slice() == ["--version"] {
             println!(
-                "cargo-wrapper-plugin-dependency-audit {}",
+                "cargo-wrapper-plugin-supply-chain-guard {}",
                 env!("CARGO_PKG_VERSION")
             );
             return;
@@ -579,7 +794,7 @@ fn main() {
             return;
         }
         eprintln!(
-            "dependency-audit: this binary must be invoked by Cargo Wrapper plugin protocol v1.\nInstall it with `cargo wrapper plugin install dependency-audit <local-binary>`, then enable it."
+            "supply-chain-guard: this binary must be invoked by Cargo Wrapper plugin protocol v1.\nInstall it with `cargo wrapper plugin install supply-chain-guard <local-binary>`, then enable it."
         );
         exit(2);
     }
@@ -664,5 +879,13 @@ mod tests {
             format_utc_timestamp(1_735_689_599, 123),
             "2024-12-31T23:59:59.123Z"
         );
+    }
+
+    #[test]
+    fn empty_audit_dump_continues_without_creating_a_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let reviews = BatchDecisionProvider::new(Decision::AcceptOnce);
+        assert_eq!(handle_audit_dump(directory.path(), &reviews).unwrap(), None);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 }

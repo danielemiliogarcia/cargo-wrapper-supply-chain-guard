@@ -1,16 +1,16 @@
 //! End-to-end security POCs built from synthetic crates and a localhost registry.
 //! They prove both default rejection and explicitly accepted build-code execution.
 
-use cargo_wrapper_dependency_audit::Result;
-use cargo_wrapper_dependency_audit::approvals::ApprovalStore;
-use cargo_wrapper_dependency_audit::candidate::resolve_candidate;
-use cargo_wrapper_dependency_audit::cargo_runner::DirectCargoRunner;
-use cargo_wrapper_dependency_audit::command_policy::classify;
-use cargo_wrapper_dependency_audit::findings::{ArtifactId, ArtifactReview};
-use cargo_wrapper_dependency_audit::lockfile::CargoLock;
-use cargo_wrapper_dependency_audit::prompt::{Decision, DecisionProvider};
-use cargo_wrapper_dependency_audit::registry::{HttpRegistryClient, RegistryClient};
-use cargo_wrapper_dependency_audit::security::SecurityGate;
+use cargo_wrapper_supply_chain_guard::Result;
+use cargo_wrapper_supply_chain_guard::approvals::ApprovalStore;
+use cargo_wrapper_supply_chain_guard::candidate::resolve_candidate;
+use cargo_wrapper_supply_chain_guard::cargo_runner::DirectCargoRunner;
+use cargo_wrapper_supply_chain_guard::command_policy::classify;
+use cargo_wrapper_supply_chain_guard::findings::{ArtifactId, ArtifactReview};
+use cargo_wrapper_supply_chain_guard::lockfile::CargoLock;
+use cargo_wrapper_supply_chain_guard::prompt::{Decision, DecisionProvider};
+use cargo_wrapper_supply_chain_guard::registry::{HttpRegistryClient, RegistryClient};
+use cargo_wrapper_supply_chain_guard::security::SecurityGate;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
@@ -41,10 +41,12 @@ fn plugin_command() -> Command {
 
 fn plugin_command_with_next(next: &Path) -> Command {
     let cargo = std::env::var_os("CARGO").expect("Cargo test runner must expose CARGO");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-wrapper-plugin-dependency-audit"));
+    let mut command = Command::new(env!(
+        "CARGO_BIN_EXE_cargo-wrapper-plugin-supply-chain-guard"
+    ));
     command
         .env("CARGO_WRAPPER_PLUGIN_PROTOCOL", "1")
-        .env("CARGO_WRAPPER_PLUGIN_NAME", "dependency-audit")
+        .env("CARGO_WRAPPER_PLUGIN_NAME", "supply-chain-guard")
         .env("CARGO_WRAPPER_REAL_CARGO", &cargo)
         .env("CARGO_WRAPPER_NEXT", next);
     command
@@ -63,16 +65,16 @@ use std::process::{Command, exit};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let trace = env::var_os("DEPENDENCY_AUDIT_NEXT_TRACE").unwrap();
+    let trace = env::var_os("SUPPLY_CHAIN_GUARD_NEXT_TRACE").unwrap();
     writeln!(
         OpenOptions::new().create(true).append(true).open(trace).unwrap(),
         "{args:?}"
     ).unwrap();
-    let status = Command::new(env::var_os("DEPENDENCY_AUDIT_TEST_REAL_CARGO").unwrap())
+    let status = Command::new(env::var_os("SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO").unwrap())
         .args(&args)
         .status()
         .unwrap();
-    if status.success() && env::var_os("DEPENDENCY_AUDIT_DIVERGE_LOCK").is_some() {
+    if status.success() && env::var_os("SUPPLY_CHAIN_GUARD_DIVERGE_LOCK").is_some() {
         let lock = fs::read_to_string("Cargo.lock").unwrap();
         let checksum = lock.find("checksum = \"").unwrap() + "checksum = \"".len();
         let end = checksum + lock[checksum..].find('"').unwrap();
@@ -327,7 +329,7 @@ impl DecisionProvider for RejectFindings {
 
     fn decide(&mut self, review: &ArtifactReview) -> Result<Decision> {
         println!("\n============================================================");
-        println!("CARGO-WRAPPER SECURITY FINDING — SYNTHETIC POC");
+        println!("CARGO-WRAPPER SECURITY FINDING - SYNTHETIC POC");
         println!("============================================================");
         println!(
             "crate:   {} {}",
@@ -355,7 +357,7 @@ impl DecisionProvider for AcceptRiskOnce {
     }
 
     fn decide(&mut self, review: &ArtifactReview) -> Result<Decision> {
-        println!("\nCARGO-WRAPPER SECURITY FINDING — ACCEPTANCE POC");
+        println!("\nCARGO-WRAPPER SECURITY FINDING - ACCEPTANCE POC");
         println!(
             "crate: {} {}",
             review.artifact.name, review.artifact.version
@@ -407,10 +409,10 @@ fn batch_audit_dump_and_acceptance_modes_preserve_the_security_boundary() {
     let dumped = plugin_command_with_next(&next)
         .args(["forcegenerate-lockfile", "--dump-audit-prompt"])
         .current_dir(workspace.path())
-        .env("DEPENDENCY_AUDIT_NEXT_TRACE", &trace)
-        .env("DEPENDENCY_AUDIT_TEST_REAL_CARGO", &real_cargo)
+        .env("SUPPLY_CHAIN_GUARD_NEXT_TRACE", &trace)
+        .env("SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO", &real_cargo)
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .output()
@@ -445,10 +447,10 @@ fn batch_audit_dump_and_acceptance_modes_preserve_the_security_boundary() {
     let accepted_once = plugin_command_with_next(&next)
         .args(["forcegenerate-lockfile", "--accept-all-once"])
         .current_dir(workspace.path())
-        .env("DEPENDENCY_AUDIT_NEXT_TRACE", &trace)
-        .env("DEPENDENCY_AUDIT_TEST_REAL_CARGO", &real_cargo)
+        .env("SUPPLY_CHAIN_GUARD_NEXT_TRACE", &trace)
+        .env("SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO", &real_cargo)
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .output()
@@ -474,10 +476,10 @@ fn batch_audit_dump_and_acceptance_modes_preserve_the_security_boundary() {
     let remembered = plugin_command_with_next(&next)
         .args(["forcegenerate-lockfile", "--accept-and-remember-all"])
         .current_dir(workspace.path())
-        .env("DEPENDENCY_AUDIT_NEXT_TRACE", &trace)
-        .env("DEPENDENCY_AUDIT_TEST_REAL_CARGO", &real_cargo)
+        .env("SUPPLY_CHAIN_GUARD_NEXT_TRACE", &trace)
+        .env("SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO", &real_cargo)
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .output()
@@ -509,13 +511,13 @@ fn interactive_rejection_never_calls_the_later_plugin() {
     let mut child = plugin_command_with_next(&next)
         .arg("forcegenerate-lockfile")
         .current_dir(workspace.path())
-        .env("DEPENDENCY_AUDIT_NEXT_TRACE", &trace)
+        .env("SUPPLY_CHAIN_GUARD_NEXT_TRACE", &trace)
         .env(
-            "DEPENDENCY_AUDIT_TEST_REAL_CARGO",
+            "SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO",
             std::env::var_os("CARGO").unwrap(),
         )
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .stdin(Stdio::piped())
@@ -546,14 +548,14 @@ fn divergent_downstream_lock_is_rejected_and_rolled_back() {
     let output = plugin_command_with_next(&next)
         .args(["forcegenerate-lockfile", "--accept-all-once"])
         .current_dir(workspace.path())
-        .env("DEPENDENCY_AUDIT_NEXT_TRACE", &trace)
+        .env("SUPPLY_CHAIN_GUARD_NEXT_TRACE", &trace)
         .env(
-            "DEPENDENCY_AUDIT_TEST_REAL_CARGO",
+            "SUPPLY_CHAIN_GUARD_TEST_REAL_CARGO",
             std::env::var_os("CARGO").unwrap(),
         )
-        .env("DEPENDENCY_AUDIT_DIVERGE_LOCK", "1")
+        .env("SUPPLY_CHAIN_GUARD_DIVERGE_LOCK", "1")
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .output()
@@ -614,6 +616,7 @@ fn real_cargo_executes_poc_but_security_gate_rejects_before_exposure() {
         store: &mut store,
         registry: &client as &dyn RegistryClient,
         decisions: &mut decisions,
+        evidence: None,
     };
     let result = gate.review_lock(&lock, "changed-lock".into());
     assert!(
@@ -657,6 +660,7 @@ fn accepting_bad_build_time_code_allows_it_to_execute() {
         store: &mut store,
         registry: &client as &dyn RegistryClient,
         decisions: &mut decisions,
+        evidence: None,
     };
 
     let reviewed = gate.review_lock(&lock, "accepted-risk".into()).unwrap();
@@ -710,7 +714,7 @@ fn forcegenerate_transaction_creates_reviewed_lock_and_enables_fast_build() {
         .arg("forcegenerate-lockfile")
         .current_dir(workspace.path())
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .status()
@@ -723,7 +727,7 @@ fn forcegenerate_transaction_creates_reviewed_lock_and_enables_fast_build() {
         .arg("build")
         .current_dir(workspace.path())
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             &approval_file,
         )
         .status()
@@ -765,7 +769,7 @@ fn ordinary_remove_uses_the_reviewed_transaction_without_force() {
         .args(["remove", "local-dependency"])
         .current_dir(workspace.path())
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             approvals.path().join("approvals.toml"),
         )
         .status()

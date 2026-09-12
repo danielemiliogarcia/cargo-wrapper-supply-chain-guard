@@ -29,7 +29,9 @@ impl Workspace {
             .map(Path::to_path_buf)
             .or_else(|| project_root(directory).ok())
             .ok_or_else(|| {
-                error("dependency-audit: no Cargo.toml was found in this directory or its parents")
+                error(
+                    "supply-chain-guard: no Cargo.toml was found in this directory or its parents",
+                )
             })?;
         let lockfile = root.join("Cargo.lock");
         if !lockfile.is_file() {
@@ -40,7 +42,7 @@ impl Workspace {
         manifests.sort();
         if manifests.is_empty() {
             return Err(error(
-                "dependency-audit: no Cargo.toml found for locked workspace",
+                "supply-chain-guard: no Cargo.toml found for locked workspace",
             ));
         }
         Ok(Self {
@@ -97,7 +99,7 @@ pub fn project_root(start: &Path) -> Result<PathBuf> {
         .first()
         .map(|path| (*path).to_path_buf())
         .ok_or_else(|| {
-            error("dependency-audit: no Cargo.toml was found in this directory or its parents")
+            error("supply-chain-guard: no Cargo.toml was found in this directory or its parents")
         })
 }
 
@@ -167,7 +169,7 @@ fn collect_manifests(directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> 
 }
 
 pub fn missing_lock_message() -> &'static str {
-    "dependency-audit: Cargo.lock is missing.\n\n\
+    "supply-chain-guard: Cargo.lock is missing.\n\n\
      The wrapper will not allow Cargo to resolve, download, or compile\n\
      an unreviewed dependency graph implicitly.\n\n\
      Run:\n\n    cargo forcegenerate-lockfile\n\n\

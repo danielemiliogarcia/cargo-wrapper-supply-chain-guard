@@ -1,5 +1,5 @@
 //! Parses `Cargo.lock` into exact remote artifacts and dependency relationships.
-//! Registry entries must have enough source and checksum data for safe review.
+//! Registry entries use checksums; Git entries use the immutable locked commit.
 
 use crate::findings::ArtifactId;
 use crate::{Result, error};
@@ -41,21 +41,29 @@ impl CargoLock {
                 continue;
             };
             if source.starts_with("git+") {
-                return Err(error(format!(
-                    "dependency-audit: unsupported remote Git dependency {} {} ({source}).\n\
-                     Git source cannot be inspected through the registry metadata/checksum boundary; refusing to continue.",
-                    package.name, package.version
-                )));
+                let git = crate::git_source::GitHubSource::parse(source).map_err(|reason| {
+                    error(format!(
+                        "supply-chain-guard: cannot securely review Git dependency {} {} ({source}): {reason}",
+                        package.name, package.version
+                    ))
+                })?;
+                artifacts.push(ArtifactId {
+                    source: source.clone(),
+                    name: package.name.clone(),
+                    version: package.version.clone(),
+                    checksum: git.commit,
+                });
+                continue;
             }
             if !source.starts_with("registry+") && !source.starts_with("sparse+") {
                 return Err(error(format!(
-                    "dependency-audit: unsupported dependency source for {} {}: {source}",
+                    "supply-chain-guard: unsupported dependency source for {} {}: {source}",
                     package.name, package.version
                 )));
             }
             let checksum = package.checksum.clone().ok_or_else(|| {
                 error(format!(
-                    "dependency-audit: registry package {} {} has no checksum; refusing to continue",
+                    "supply-chain-guard: registry package {} {} has no checksum; refusing to continue",
                     package.name, package.version
                 ))
             })?;
@@ -100,21 +108,36 @@ checksum = "abc"
     }
 
     #[test]
-    fn git_dependencies_fail_closed() {
+    fn exact_github_git_dependencies_use_the_locked_commit_as_identity() {
         let lock: CargoLock = toml::from_str(
             r#"version = 4
 [[package]]
 name = "demo"
 version = "1.0.0"
-source = "git+https://example.invalid/demo#abc"
+source = "git+https://github.com/example/demo.git?branch=main#0123456789abcdef0123456789abcdef01234567"
 "#,
         )
         .unwrap();
-        assert!(
-            lock.remote_artifacts()
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported remote Git")
+        let artifact = lock.remote_artifacts().unwrap().remove(0);
+        assert!(artifact.is_git());
+        assert_eq!(
+            artifact.checksum,
+            "0123456789abcdef0123456789abcdef01234567"
         );
+    }
+
+    #[test]
+    fn unsupported_or_non_exact_git_dependencies_fail_closed() {
+        for source in [
+            "git+https://example.invalid/demo#0123456789abcdef0123456789abcdef01234567",
+            "git+https://github.com/example/demo#abc",
+            "git+ssh://git@github.com/example/demo#0123456789abcdef0123456789abcdef01234567",
+        ] {
+            let lock: CargoLock = toml::from_str(&format!(
+                "version=4\n[[package]]\nname='demo'\nversion='1.0.0'\nsource='{source}'"
+            ))
+            .unwrap();
+            assert!(lock.remote_artifacts().is_err(), "accepted {source}");
+        }
     }
 }

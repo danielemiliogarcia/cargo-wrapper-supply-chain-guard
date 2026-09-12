@@ -154,7 +154,7 @@ pub fn blocked_message(command: &str, args: &[String], command_index: usize) -> 
         suggestion[command_index] = "forceinstall".to_owned();
         suggestion.insert(command_index + 1, INSTALL_RISK_ACCEPTANCE_FLAG.to_owned());
         return Some(format!(
-            "dependency-audit: `cargo {command}` is blocked because its dependency graph cannot be reviewed before download.\n\nCargo installation downloads and compiles a separate package and its dependency graph. Even if you trust the requested package, its current transitive dependencies, build scripts, or procedural macros could be compromised and execute with your user privileges. Dependency Audit cannot currently resolve and review that complete graph without first allowing Cargo to download unreviewed source. Real Cargo was not invoked.\n\nSafer option: perform the installation in an isolated, disposable sandbox.\n\nTo proceed once without Dependency Audit inspection, explicitly accept the unreviewed installation risk:\n\n    cargo {}\n\n`cargo forceadd` is not an alternative: it adds a dependency to the current project instead of installing an executable.",
+            "supply-chain-guard: `cargo {command}` is blocked because its dependency graph cannot be reviewed before download.\n\nCargo installation downloads and compiles a separate package and its dependency graph. Even if you trust the requested package, its current transitive dependencies, build scripts, or procedural macros could be compromised and execute with your user privileges. Supply Chain Guard cannot currently resolve and review that complete graph without first allowing Cargo to download unreviewed source. Real Cargo was not invoked.\n\nSafer option: perform the installation in an isolated, disposable sandbox.\n\nTo proceed once without Supply Chain Guard inspection, explicitly accept the unreviewed installation risk:\n\n    cargo {}\n\n`cargo forceadd` is not an alternative: it adds a dependency to the current project instead of installing an executable.",
             suggestion.join(" ")
         ));
     }
@@ -171,7 +171,7 @@ pub fn blocked_message(command: &str, args: &[String], command_index: usize) -> 
     let mut suggestion = args.to_vec();
     suggestion[command_index] = force.to_owned();
     Some(format!(
-        "dependency-audit: `cargo {command}` {reason}.\n\nUse:\n\n    cargo {}\n\nto resolve and security-review the candidate dependency set first.",
+        "supply-chain-guard: `cargo {command}` {reason}.\n\nUse:\n\n    cargo {}\n\nto resolve and security-review the candidate dependency set first.",
         suggestion.join(" ")
     ))
 }

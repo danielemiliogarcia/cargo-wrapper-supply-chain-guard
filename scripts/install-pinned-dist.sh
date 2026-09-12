@@ -5,7 +5,7 @@
 set -eu
 
 dist_version=0.32.0
-install_dir=${DEPENDENCY_AUDIT_DIST_BIN_DIR:-"$HOME/.cargo/bin"}
+install_dir=${SUPPLY_CHAIN_GUARD_DIST_BIN_DIR:-"$HOME/.cargo/bin"}
 
 if [ -x "$install_dir/dist" ] \
     && [ "$("$install_dir/dist" --version)" = "cargo-dist $dist_version" ]; then
@@ -30,7 +30,7 @@ esac
 
 archive="cargo-dist-${target}.tar.xz"
 url="https://github.com/axodotdev/cargo-dist/releases/download/v${dist_version}/${archive}"
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/dependency-audit-dist.XXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/supply-chain-guard-dist.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 
 printf 'Downloading cargo-dist %s for %s\n' "$dist_version" "$target"

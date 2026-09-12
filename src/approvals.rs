@@ -27,6 +27,9 @@ pub struct ApprovalRecord {
     pub name: String,
     pub version: String,
     pub checksum: String,
+    /// Complete repository-tree digest for Git artifacts. Registry records omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     #[serde(default)]
     pub approved_findings: BTreeSet<String>,
     #[serde(default)]
@@ -46,10 +49,12 @@ pub struct WorkspaceRecord {
 
 impl ApprovalRecord {
     pub fn matches(&self, artifact: &ArtifactId) -> bool {
-        self.source == artifact.source
+        let identity_matches = self.source == artifact.source
             && self.name == artifact.name
             && self.version == artifact.version
-            && self.checksum == artifact.checksum
+            && self.checksum == artifact.checksum;
+        identity_matches
+            && (!artifact.is_git() || self.content_sha256.as_deref().is_some_and(valid_sha256))
     }
 }
 
@@ -75,27 +80,27 @@ impl ApprovalStore {
     }
 
     pub fn default_path() -> Result<PathBuf> {
-        if let Some(path) = std::env::var_os("CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE") {
+        if let Some(path) = std::env::var_os("CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE") {
             return Ok(PathBuf::from(path));
         }
         #[cfg(windows)]
         let directory = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .ok_or_else(|| {
-                error("APPDATA is not defined; set CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE")
+                error("APPDATA is not defined; set CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE")
             })?
-            .join("CargoWrapperDependencyAudit");
+            .join("CargoWrapperSupplyChainGuard");
         #[cfg(not(windows))]
         let directory = if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
             PathBuf::from(path)
         } else {
             let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
-                error("HOME is not defined; set CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE")
+                error("HOME is not defined; set CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE")
             })?;
             home.join(".config")
         };
         #[cfg(not(windows))]
-        let directory = directory.join("cargo-wrapper-dependency-audit");
+        let directory = directory.join("cargo-wrapper-supply-chain-guard");
         Ok(directory.join("approvals.toml"))
     }
 
@@ -116,6 +121,15 @@ impl ApprovalStore {
     }
 
     pub fn remember(&mut self, artifact: &ArtifactId, findings: BTreeSet<String>) {
+        self.remember_with_content_sha256(artifact, findings, None);
+    }
+
+    pub fn remember_with_content_sha256(
+        &mut self,
+        artifact: &ArtifactId,
+        findings: BTreeSet<String>,
+        content_sha256: Option<String>,
+    ) {
         if let Some(existing) = self
             .data
             .approvals
@@ -124,6 +138,9 @@ impl ApprovalStore {
         {
             existing.approved_findings.extend(findings);
             existing.scanner_version = crate::scanner::SCANNER_VERSION;
+            if content_sha256.is_some() {
+                existing.content_sha256 = content_sha256;
+            }
             return;
         }
         self.data.approvals.push(ApprovalRecord {
@@ -131,9 +148,18 @@ impl ApprovalStore {
             name: artifact.name.clone(),
             version: artifact.version.clone(),
             checksum: artifact.checksum.clone(),
+            content_sha256,
             approved_findings: findings,
             scanner_version: crate::scanner::SCANNER_VERSION,
         });
+    }
+
+    pub fn content_sha256(&self, artifact: &ArtifactId) -> Option<&str> {
+        self.data
+            .approvals
+            .iter()
+            .find(|approval| approval.matches(artifact))
+            .and_then(|approval| approval.content_sha256.as_deref())
     }
 
     pub fn scanner_is_current(&self, artifact: &ArtifactId) -> bool {
@@ -219,6 +245,10 @@ impl ApprovalStore {
     }
 }
 
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +287,24 @@ mod tests {
         let path = directory.path().join("approvals.toml");
         fs::write(&path, "not = [valid").unwrap();
         assert!(ApprovalStore::load(path).is_err());
+    }
+
+    #[test]
+    fn git_approval_requires_a_recorded_complete_tree_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("approvals.toml");
+        let git = ArtifactId {
+            source: "git+https://github.com/acme/demo#0123456789abcdef0123456789abcdef01234567"
+                .into(),
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            checksum: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        let mut store = ApprovalStore::load(path).unwrap();
+        store.remember(&git, BTreeSet::new());
+        assert!(!store.has_artifact(&git));
+        store.remember_with_content_sha256(&git, BTreeSet::new(), Some("a".repeat(64)));
+        assert!(store.has_artifact(&git));
+        assert_eq!(store.content_sha256(&git), Some("a".repeat(64).as_str()));
     }
 }

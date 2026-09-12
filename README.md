@@ -1,217 +1,277 @@
-<!-- User guide for installing and operating the standalone Dependency Audit plugin. -->
-# Cargo Wrapper Dependency Audit
+<!-- Overview, installation, policy, and operator guide for Supply Chain Guard. -->
+# Cargo Wrapper Supply Chain Guard
 
-Dependency Audit is an optional middleware plugin for the [Cargo Wrapper](https://github.com/danielemiliogarcia/cargowrapper) project forked from [Original Cargo Wrapper](https://github.com/jonasmartin/cargowrapper).
+Supply Chain Guard is a pre-execution supply-chain firewall for Cargo Wrapper. It resolves an exact candidate dependency graph, verifies and statically scans each unapproved crates.io or supported GitHub artifact, and asks the pinned `cargo-vet` resolver whether selected crates.io audit evidence satisfies `safe-to-run` before Cargo may compile or execute dependency code.
 
-Before Cargo can download, compile, or execute newly resolved dependency source, it identifies exact remote artifacts and surfaces their build-time capabilities for explicit review.
+The plugin is registered as `supply-chain-guard` and distributed as `cargo-wrapper-plugin-supply-chain-guard[.exe]`.
 
-The plugin is registered as `dependency-audit` and distributed as `cargo-wrapper-plugin-dependency-audit[.exe]`.
+This project preserves the scanner and transaction protections derived from [Cargo Wrapper Dependency Audit](https://github.com/danielemiliogarcia/cargo-wrapper-dependency-audit), with an independent product identity, trust state, release history, and cargo-vet evidence policy.
 
 ## What it protects
 
-For Cargo operations routed through an enabled plugin, Dependency Audit provides:
+- `cargo add`, `update`, lock generation, build, run, test, check, clippy, doc, bench, rustc, rustdoc, metadata, fetch, package, publish, and tree operations that pass through Cargo Wrapper;
+- exact direct and transitive registry artifacts and immutable GitHub commits, including build dependencies and procedural macros;
+- build-time process, network, filesystem, environment, and custom build-script capabilities detected by static analysis;
+- candidate/final lock consistency, transaction rollback, and `--locked` replay;
+- explicit reject, accept once, exact remember, and LLM batch-review workflows.
 
-- exact source, crate name, version, and checksum identities;
-- isolated, index-only candidate resolution for dependency mutations;
-- bounded in-memory `.crate` download and archive inspection after explicit authorization;
-- checksum verification before source evidence is trusted;
-- detection of build scripts, procedural macros, build-dependency closure, process execution, network access, filesystem mutation, environment/credential-like access, FFI, dynamic loading, shells, and downloaders;
-- default-deny interactive decisions: reject, accept once, or remember the exact artifact;
-- candidate-versus-final lock comparison and workspace rollback on failure or divergence;
-- optional copy-ready LLM prompts and batch audit reports;
-- an optional exact-artifact factory trust bundle.
+Untrusted `.crate` archives are first downloaded into bounded private memory, checked against their registry SHA-256, and parsed as archive data. No crate source is cached, extracted, compiled, macro-expanded, loaded, or executed during this first inspection stage.
 
-Checksum mismatch, malformed archives, unsupported dependency sources, and inspection failures cannot be overridden.
+For a `git+https://github.com/...#<commit>` lock entry, the plugin downloads GitHub's archive for that exact 40-hex commit over TLS into the same bounded memory-only path. It does not run `git`, create a checkout, or invoke hooks, submodules, Git LFS filters, or credential helpers. It rejects other Git hosts, missing or abbreviated locked commits, symlinks, submodules, unresolved LFS pointers, ambiguous packages, and oversized archives. A remembered Git approval is bound to the complete lock source, package name/version, locked commit, scanner version, approved findings, and a deterministic SHA-256 of the complete repository tree.
 
-## Threat model and limitations
+For a crate that still needs human review, the cargo-vet phase may let Cargo metadata unpack source beneath a private temporary Cargo home. It never enters the developer's normal Cargo cache or real workspace and is never compiled or executed. The complete temporary directory is destroyed after the decision. See [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-This is a guardrail for Cargo calls that pass through Cargo Wrapper. It is not an operating-system sandbox and static analysis cannot prove source safe. A developer, IDE, plugin, or tool that invokes real Cargo directly can bypass it. Path dependencies are local code rather than immutable registry artifacts, and new or changed Git dependencies fail closed instead of being cloned before review.
+## What it is not
 
-Plugins are native programs that run with your privileges. Verify this plugin's source and release provenance before enabling it. A GitHub artifact attestation establishes which repository and workflow produced an artifact; it does not prove the source is harmless.
+Supply Chain Guard is not an operating-system sandbox and static analysis is not proof of safety. It is also not vulnerability scanning. Continue using `cargo audit`, Dependabot, OSV, or equivalent tools for known advisories. Cargo-vet's `safe-to-run` evidence addresses whether reviewed code is suitable to execute locally; this plugin does not claim a separate `safe-to-deploy` production certification.
 
-Protocol v1 orders plugins alphabetically. Dependency Audit uses `CARGO_WRAPPER_REAL_CARGO` for private isolated candidate resolution, which later plugins cannot intercept. A policy that must wrap Dependency Audit needs a registration name sorting before `dependency-audit`, such as `age-policy`.
+## Default zero-configuration policy
 
-## Requirements
+The default cargo-vet mode is `auto`:
 
-- Cargo Wrapper with executable plugin protocol v1.
-- A supported precompiled release target:
-  - `aarch64-apple-darwin`
-  - `aarch64-unknown-linux-gnu`
-  - `x86_64-apple-darwin`
-  - `x86_64-unknown-linux-gnu`
-  - `x86_64-pc-windows-msvc`
+1. A valid project `supply-chain` store and its locked imports take precedence.
+2. Without project cargo-vet policy, the plugin refreshes its selected default imports directly from Google, Mozilla, Bytecode Alliance, Zcash, and ISRG.
+3. Each successfully fetched set is strictly filtered, fingerprinted, and saved as an exact plugin-owned snapshot. The last valid snapshot is used when refresh is unavailable; the embedded `community-audits-2026-09-08` baseline is the first-run recovery fallback.
+4. A present but malformed or unlocked project store fails closed.
+5. No qualifying audit path means the existing static review still appears.
+6. An unavailable helper warns and falls back to static review. In `required` mode it rejects.
 
-The protocol contract is documented in [PLUGIN-PROTOCOL.md](https://github.com/danielemiliogarcia/cargowrapper/blob/fork-main/PLUGIN-PROTOCOL.md).
+The default imports are the direct audit URLs published through cargo-vet's registry by those five selected producers. Only full audits, delta audits, violations, and necessary criterion implications are retained. Exemptions, wildcard audits, and trusted-publisher entries can never suppress review. The embedded baseline remains immutable and digest-verified so the plugin has a known recovery policy. See [CURATED-AUDITS.md](CURATED-AUDITS.md).
 
-## Install a verified precompiled binary
+Cargo-vet evidence applies only to artifacts whose Cargo lock source is the canonical crates.io registry. Private registries, mirrors, and Git dependencies always remain in the static review path, even if their crate name and version match a crates.io audit.
 
-Precompiled releases are preferred because building the plugin from source would make Cargo download and compile the plugin's own dependencies before this protection is available.
+## Install verified precompiled releases
 
-If you prefer to build from source after reviewing and auditing the code, or because you do not trust the published binary, perform the bootstrap build in an isolated, disposable sandbox. This contains the risk from dependencies that Cargo must fetch and compile before the plugin is available to protect later operations. A sandbox limits exposure to the host, but it does not replace dependency review, checksum verification, or reproducible-build comparison.
+Precompiled releases avoid the chicken-and-egg problem of compiling this security plugin and its dependencies before its protection exists. Each platform bundle contains the plugin, pinned cargo-vet 0.10.2 helper, install manifest, licenses, notices, and exact hashes.
 
-1. Pin an exact release version and inspect its source and release notes.
-2. Download the archive for your platform from that release.
-3. Verify its checksum and GitHub artifact attestation against this repository and `.github/workflows/release.yml`.
-4. Extract the archive.
-5. Register the local binary. Core installation deliberately leaves it inactive.
-6. Inspect the installed state, then explicitly enable it.
+If you prefer source because you audited it and do not trust a binary, build in an isolated disposable sandbox. Do not expose your normal Cargo home, credentials, writable host projects, or Docker socket.
 
-Linux and macOS:
+### Linux and macOS
+
+Download `install.sh`, inspect it, and verify its GitHub attestation before executing it:
 
 ```sh
-version=v0.1.0
-archive=cargo-wrapper-dependency-audit-x86_64-unknown-linux-gnu.tar.xz
-directory=${archive%.tar.xz}
-
-gh attestation verify "$archive" \
-  --repo danielemiliogarcia/cargo-wrapper-dependency-audit \
-  --signer-workflow danielemiliogarcia/cargo-wrapper-dependency-audit/.github/workflows/release.yml
-sha256sum --check "$archive.sha256"
-tar -xJf "$archive"
-
-cargo wrapper plugin install dependency-audit \
-  "./$directory/cargo-wrapper-plugin-dependency-audit"
-cargo wrapper plugin list
-cargo wrapper plugin enable dependency-audit
-cargo wrapper plugin list
+version=0.1.0
+gh attestation verify install.sh \
+  --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
+  --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$version" \
+  --deny-self-hosted-runners
+chmod +x install.sh
+CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION="$version" ./install.sh
+cargo wrapper plugin enable supply-chain-guard
+cargo supply-chain-guard cargo-vet status
 ```
 
-On macOS, use `shasum -a 256` if `sha256sum` is unavailable and select the Apple target matching the machine.
+For a GitHub release installation, a current GitHub CLI is required. Before extracting anything, the installer verifies the bundle checksum and verifies that the bundle was produced by this repository's release workflow from the requested version tag on a GitHub-hosted runner. After extraction, it verifies the manifest identities and hashes for both executables.
 
-Windows PowerShell:
+For a local release directory instead of GitHub:
+
+```sh
+CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL=file:///absolute/path/to/target/distrib \
+  ./install.sh
+```
+
+### Windows PowerShell
+
+Download and inspect `install.ps1`, verify its GitHub attestation, then run:
 
 ```powershell
-$Archive = "cargo-wrapper-dependency-audit-x86_64-pc-windows-msvc.zip"
-$ExtractRoot = ".\dependency-audit"
-$Directory = Join-Path $ExtractRoot ([IO.Path]::GetFileNameWithoutExtension($Archive))
-gh attestation verify $Archive `
-  --repo danielemiliogarcia/cargo-wrapper-dependency-audit `
-  --signer-workflow danielemiliogarcia/cargo-wrapper-dependency-audit/.github/workflows/release.yml
-$Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
-$Expected = ((Get-Content "$Archive.sha256") -split '\s+')[0].ToLowerInvariant()
-if ($Actual -ne $Expected) { throw "archive checksum mismatch" }
-Expand-Archive $Archive -DestinationPath $ExtractRoot
-
-cargo wrapper plugin install dependency-audit `
-  (Join-Path $Directory "cargo-wrapper-plugin-dependency-audit.exe")
-cargo wrapper plugin list
-cargo wrapper plugin enable dependency-audit
-cargo wrapper plugin list
+$Version = "0.1.0"
+gh attestation verify .\install.ps1 `
+  --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard `
+  --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml `
+  --source-ref "refs/tags/v$Version" `
+  --deny-self-hosted-runners
+Set-ExecutionPolicy -Scope Process Bypass
+$env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION = $Version
+.\install.ps1
+cargo wrapper plugin enable supply-chain-guard
+cargo supply-chain-guard cargo-vet status
 ```
 
-The core host does not download, inspect, execute, update, or automatically enable the binary during installation.
-
-## Status and configuration
-
-When enabled:
+The installer leaves the plugin disabled until explicit enablement. If you download a bundle manually instead, verify its provenance before extracting it:
 
 ```sh
-cargo dependency-audit
+gh attestation verify <archive> \
+  --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
+  --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version> \
+  --deny-self-hosted-runners
 ```
 
-This prints the plugin, protocol, and scanner versions; approval path; and installed factory-bundle version.
+Both installers verify the archive checksum and then verify both executable hashes and identities from `INSTALL-MANIFEST.toml` before writing plugin-owned files. For a manual installation, perform those same checks, copy `cargo-vet[.exe]` plus `INSTALL-MANIFEST.toml` to the platform data path documented below, and register the extracted plugin binary:
 
-Personal exact approvals default to:
+The `file://` download override is intended for locally built bundles and disposable CI or sandbox tests. Because those files are not GitHub release artifacts, the installer explicitly reports that GitHub attestation verification was skipped. Never treat that local mode as proof of release provenance.
 
-- Linux/macOS: `$XDG_CONFIG_HOME/cargo-wrapper-dependency-audit/approvals.toml`, or `$HOME/.config/cargo-wrapper-dependency-audit/approvals.toml`.
-- Windows: `%APPDATA%\CargoWrapperDependencyAudit\approvals.toml`.
+```sh
+cargo wrapper plugin install supply-chain-guard \
+  /absolute/path/to/cargo-wrapper-plugin-supply-chain-guard
+cargo wrapper plugin enable supply-chain-guard
+```
 
-Override the file with `CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE`. Set `CARGO_WRAPPER_DEPENDENCY_AUDIT_VERBOSE` for fast-path diagnostics. Approval TOML is parsed strictly as data and malformed content fails closed.
+The helper and manifest belong in `$XDG_DATA_HOME/cargo-wrapper-supply-chain-guard/bin` (or `~/.local/share/cargo-wrapper-supply-chain-guard/bin`) on Linux/macOS, and `%LOCALAPPDATA%\CargoWrapperSupplyChainGuard\bin` on Windows. Keep the executable names from the release bundle unchanged.
 
-## Interactive dependency review
+## Interactive review
 
-Commands that can change dependency resolution require their reviewed form:
+Use force commands when changing dependency resolution:
 
 ```sh
 cargo forcegenerate-lockfile
 cargo forceadd <dependency-name> --features <feature-name>
-cargo forceremove <dependency-name> # compatibility alias
-cargo remove <dependency-name>      # also reviewed directly
-cargo forceupdate                   # core rewrites this to the reviewed update path
+cargo forceremove <dependency-name>
+cargo remove <dependency-name>
+cargo forceupdate
 ```
 
-Direct `cargo install` is rejected because Cargo installation downloads and compiles a separate package and its dependency graph, but the plugin cannot currently resolve and review that complete graph without first allowing Cargo to download unreviewed source. Even when you trust the requested package, its current transitive dependencies, build scripts, or procedural macros could be compromised and execute with your user privileges. The rejection immediately prints the complete command for the scoped bypass:
+For each unresolved finding the interactive UI offers:
 
-```sh
-cargo forceinstall --accept-unreviewed-install-risk <package-name>
-```
+- `V`: view matched code evidence;
+- `S`: show a complete relevant source file;
+- `C`: show the exact crates.io release or immutable GitHub commit link;
+- `D`: show the exact docs.rs link when the artifact comes from crates.io;
+- `L`: print a copy-ready LLM audit prompt;
+- `F`: save that prompt to an `audit-prompt-*.md` file and print a short agent handoff containing its absolute path.
 
-Without that flag, `cargo forceinstall` repeats the explanation and remains blocked. With it, the plugin displays a prominent warning, removes its private flag, and forwards `cargo install --locked <package-name>` to the remaining plugin chain. This one-time bypass does not inspect the installation graph or create approvals. Prefer performing an unreviewed installation in an isolated, disposable sandbox. `cargo forceadd` is not an alternative because it adds a dependency to the current project instead of installing an executable.
+The final decisions remain reject, accept once, or accept and remember for the exact immutable identity and finding set. Git approvals additionally record the complete tree SHA-256.
 
-When source inspection is needed, the first prompt asks whether the plugin may download each `.crate` into bounded private memory. It will not cache, extract, compile, macro-expand, analyze with rust-analyzer, dynamically load, interpret, or execute that source.
+## GitHub Git dependencies
 
-For each finding:
+Both direct and transitive GitHub dependencies go through the same static capability scanner and reject/once/remember decisions as registry crates. The non-registry Git source is itself a finding, so every new exact commit requires an explicit Reject, Accept Once, or Accept and Remember decision even when no additional build-time capability is detected. A branch, tag, or `rev` in `Cargo.toml` is never trusted as the identity: Cargo must resolve it to the full commit stored after `#` in `Cargo.lock`, and that immutable lock identity is what Supply Chain Guard reviews.
 
-- `V`: show matched code evidence.
-- `F`: show complete relevant file from the verified in-memory archive.
-- `C`: print exact crates.io link.
-- `D`: print exact docs.rs and source links.
-- `L`: print copy-ready read-only LLM audit prompt.
-- `R` or Enter: reject.
-- `O`: accept once for this transaction.
-- `W`: accept and remember the exact artifact/checksum/finding set.
+The initial candidate calculation may fetch a Git dependency only into its disposable private Cargo home because Cargo needs the repository metadata to resolve a Git package. Cargo does not build or execute it there. The security review then independently obtains the exact commit as a bounded no-checkout archive and computes its deterministic tree digest before the real workspace or normal Cargo cache changes. See [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-Evidence and links are advisory and return to the default-deny decision prompt.
+Public HTTPS GitHub dependencies are supported initially. Private repositories and other Git hosts fail closed rather than silently weakening authentication or archive bounds. Path dependencies remain governed as local workspace code, outside remote-artifact approvals.
 
-## Batch audit workflow
+When an ordinary guarded command such as `cargo check` or a commit hook encounters an unapproved locked Git artifact, the same review UI is attached to the invoking terminal. EOF or unavailable input follows the default reject path instead of hanging or silently accepting. Review and remember the exact dependency once from a terminal if hooks or IDE tasks must subsequently run noninteractively.
 
-Create one report without changing the workspace, calling downstream Cargo, or saving approvals:
-
-```sh
-cargo forceadd <dependency-name> --features <feature-name> --dump-audit-prompt
-```
-
-Give the printed file to an LLM or coding agent using the exact handoff printed by the plugin. The report requires read-only web review, treats crate-controlled text as hostile, prohibits execution, and requires one overall `ACCEPT_ALL` or `REJECT` verdict. The plugin never calls an LLM and never consumes its verdict automatically.
-
-After independently accepting the report, rerun resolution and inspection with one of:
-
-```sh
-cargo forceadd <dependency-name> --features <feature-name> --accept-all-once
-cargo forceadd <dependency-name> --features <feature-name> --accept-and-remember-all
-```
-
-Compare every printed exact identity with the earlier report because resolution may have changed.
-
-## Optional factory trust bundle
-
-The embedded bundle is inert until explicitly installed:
-
-```sh
-cargo dependency-audit trust-bundle show
-cargo dependency-audit trust-bundle install
-```
-
-Installation requires a default-deny confirmation and imports only exact versions and checksums bound to the current scanner version. It does not authorize older versions by range. Future releases, checksum changes, yanked or excluded artifacts, and unlisted crates still require review. See [FACTORY-SCAN.md](FACTORY-SCAN.md) for the cumulative scan provenance and exclusions.
-
-To use an empty factory set, simply never install the bundle. Personal interactive approvals continue independently.
-
-## Disable, uninstall, and purge
-
-```sh
-cargo wrapper plugin disable dependency-audit
-cargo wrapper plugin uninstall dependency-audit
-```
-
-Core uninstall removes only the installed executable and deliberately retains approvals. To intentionally purge them after disabling/uninstalling, remove only the applicable plugin-owned directory listed in “Status and configuration,” or the exact override file you configured.
-
-## Security POCs
-
-The test suite uses only a synthetic crate served by a loopback-only registry. It proves both boundaries:
+When cargo-vet supplies eligible evidence, the UI states exactly what happened:
 
 ```text
-rejected finding → downstream never invoked → no canary
-accepted finding → downstream invoked → synthetic build.rs creates PWNED_CANARY
+✓ example-crate 1.2.3
+  Interactive review omitted: cargo-vet safe-to-run satisfied by Mozilla
+  Evidence: validated full/delta cargo-vet audit path
+  Policy: live cargo-vet imports (0123456789abcdef)
 ```
 
-Run with visible output:
+This means the selected audit authority satisfied a specific criterion. It does not mean the crate is universally safe.
+
+## LLM batch review
 
 ```sh
-cargo test --test security_poc -- --nocapture
+cargo forceadd <dependency-name> --dump-audit-prompt
 ```
 
-The conspicuous `YOU COULD HAVE BEEN INFECTED!` banner is test-only and explicitly says it is a localhost synthetic POC.
+If one or more artifacts remain unresolved, the terminal prints ticked cargo-vet evidence for covered candidates and `!` notices for candidates that still need review. Supply Chain Guard then creates a Markdown report containing every unresolved artifact, exact links, matching source excerpts, and strict instructions never to execute crate code. Artifacts cleared by cargo-vet appear only in its evidence context and are excluded from the LLM workload. The requested Cargo operation stops until you review the overall verdict and rerun it with one of:
 
-## Development
+```sh
+cargo forceadd <dependency-name> --accept-all-once
+cargo forceadd <dependency-name> --accept-and-remember-all
+```
+
+`--accept-all-once` applies only to unresolved artifacts and never converts cargo-vet evidence into a personal approval. `--accept-and-remember-all` is an explicit instruction to remember every exact reviewed artifact, including cargo-vet-covered artifacts, as personal trust.
+
+Cargo-vet decisions also have a separate non-approval cache for canonical crates.io artifacts. Each entry is bound to the exact registry source, crate name, version, checksum, verified helper binary, and selected evidence-policy fingerprint. Repeating an operation with an unchanged identity and policy reuses that decision without asking `[I] Inspect` or downloading the `.crate` again. Git artifacts do not inherit cargo-vet evidence. If the policy snapshot or helper changes, Supply Chain Guard re-runs cargo-vet before source inspection; if the audit no longer covers the artifact, the normal static review returns. This preserves audit revocation while avoiding repetitive prompts.
+
+If cargo-vet covers every static-review candidate, there is nothing for an LLM to audit. Supply Chain Guard prints the exact cargo-vet evidence, does not create an empty Markdown report, and immediately continues the originally requested Cargo operation. No repeated command or acceptance flag is needed.
+
+## Configuration modes
+
+The plugin configuration is:
+
+- Linux/macOS: `$XDG_CONFIG_HOME/cargo-wrapper-supply-chain-guard/config.toml`, or `~/.config/cargo-wrapper-supply-chain-guard/config.toml`;
+- Windows: `%APPDATA%\CargoWrapperSupplyChainGuard\config.toml`;
+- override: `CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_CONFIG`.
+
+```toml
+[cargo-vet]
+mode = "auto" # auto | curated | project | off | required
+```
+
+- `auto`: project policy when present, otherwise refresh the selected default imports;
+- `curated`: ignore project policy and refresh the selected default imports;
+- `project`: require valid project policy;
+- `off`: retain static scanning without cargo-vet evidence;
+- `required`: project policy when present, otherwise the default imports, and reject helper failures.
+
+When cargo-vet evidence is needed, an online guarded operation refreshes the selected default imports once for that invocation. `CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_OFFLINE=true` disables only this refresh and uses the last validated cached snapshot, or the embedded recovery baseline if no cache exists. `CARGO_NET_OFFLINE=true` has the same effect on evidence refresh, but also makes Cargo itself offline, so a dependency operation can fail if its isolated Cargo home does not already contain the required index data. Project cargo-vet stores remain project-controlled: update their `imports.lock` with normal cargo-vet tooling and commit the result for reproducible team policy.
+
+Force an immediate default-import refresh with:
+
+```sh
+cargo supply-chain-guard cargo-vet update
+```
+
+Read-only diagnostics:
+
+```sh
+cargo supply-chain-guard
+cargo supply-chain-guard cargo-vet status
+cargo supply-chain-guard cargo-vet sources
+cargo supply-chain-guard cargo-vet explain-policy
+```
+
+## Factory trust bundle
+
+The optional factory bundle contains exact static-scanner approvals. Inspect it before installation:
+
+```sh
+cargo supply-chain-guard trust-bundle show
+cargo supply-chain-guard trust-bundle install
+```
+
+It is separate from cargo-vet evidence. It can reduce prompts for organization-approved artifacts but does not authorize future versions or changed checksums.
+
+## Direct Cargo installation
+
+`cargo install` and `cargo forceinstall` are blocked because resolving an install package requires Cargo to download its source graph before this plugin can enforce the pre-download boundary. Even a trusted top-level tool may have a newly compromised transitive dependency.
+
+Prefer a disposable sandbox. To bypass review exactly once after accepting this limitation:
+
+```sh
+cargo forceinstall <package-name> --accept-unreviewed-install-risk
+```
+
+The plugin displays a prominent warning, removes its private flag, and invokes downstream `cargo install --locked`. It creates no approvals.
+
+## Plugin interaction
+
+Cargo Wrapper protocol v1 orders plugins by name. `age-policy` runs before `supply-chain-guard`, so it selects old-enough versions first and Supply Chain Guard scans and vets those exact versions. Do not enable `dependency-audit` and `supply-chain-guard` together; startup rejects the duplicate guard chain with instructions to disable one.
+
+## Uninstall
+
+```sh
+./uninstall.sh          # retain approvals/configuration
+./uninstall.sh --purge  # also remove plugin-owned approvals/configuration
+```
+
+Windows:
+
+```powershell
+.\uninstall.ps1
+.\uninstall.ps1 -Purge
+```
+
+The uninstallers never remove Cargo Wrapper, Cargo, Rustup, another plugin, or a shared parent directory. Purge removes the plugin-owned cargo-vet import snapshots and fingerprint-bound decision cache; a normal uninstall retains them.
+
+## Development and testing
+
+Clone the repository together with its pinned cargo-vet source:
+
+```sh
+git clone --recurse-submodules \
+  https://github.com/danielemiliogarcia/cargo-wrapper-supply-chain-guard.git
+cd cargo-wrapper-supply-chain-guard
+```
+
+For an existing clone, initialize or repair the same submodule state with:
+
+```sh
+git submodule update --init --recursive
+```
+
+Both commands check out the exact cargo-vet commit recorded by this repository;
+they do not follow cargo-vet's latest branch tip.
 
 ```sh
 cargo fmt --all --check
@@ -219,14 +279,28 @@ cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
 
-Build local release artifacts with pinned cargo-dist using [scripts/install-pinned-dist.sh](scripts/install-pinned-dist.sh), then:
+Build the pinned helper and run the real resolver canary:
 
 ```sh
-dist build --artifacts=local --output-format=json
+CARGO_TARGET_DIR=target/cargo-vet-helper \
+  cargo build --manifest-path third-party/cargo-vet/Cargo.toml --locked --release
+
+SUPPLY_CHAIN_GUARD_RUN_REAL_VET_TEST=1 \
+SUPPLY_CHAIN_GUARD_TEST_CARGO_VET="$PWD/target/cargo-vet-helper/release/cargo-vet" \
+  cargo test --locked \
+  vet::tests::pinned_real_cargo_vet_resolves_full_and_delta_evidence_without_executing_code \
+  -- --nocapture
 ```
 
-See [RELEASING.md](RELEASING.md).
+Curated data regeneration requires that exact helper:
 
-## License and extraction history
+```sh
+SUPPLY_CHAIN_GUARD_CARGO_VET="$PWD/target/cargo-vet-helper/release/cargo-vet" \
+  cargo run --locked --example generate_curated_audits -- --check
+```
 
-MIT licensed; see [LICENSE](LICENSE).
+See [SBX-TESTING.md](SBX-TESTING.md) for the disposable Docker `sbx` workflow, [THREAT_MODEL.md](THREAT_MODEL.md) for boundaries, [MIGRATING-FROM-DEPENDENCY-AUDIT.md](MIGRATING-FROM-DEPENDENCY-AUDIT.md) for migration, and [RELEASING.md](RELEASING.md) for release procedure.
+
+## License
+
+MIT. The bundled cargo-vet helper is available under MIT or Apache-2.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -32,7 +32,7 @@ impl ProcessRunner {
     fn run(&self, command: &mut Command) -> Result<ExitStatus> {
         command.status().map_err(|run_error| {
             error(format!(
-                "dependency-audit: cannot run {}: {run_error}",
+                "supply-chain-guard: cannot run {}: {run_error}",
                 self.executable.display()
             ))
         })

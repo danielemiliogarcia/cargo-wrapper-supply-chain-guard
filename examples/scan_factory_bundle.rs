@@ -1,11 +1,11 @@
 //! Maintainer tool that statically scans exact crates.io artifacts from lockfile inventory.
 //! It verifies archive checksums, never extracts source, and excludes RustSec-flagged entries.
 
-use cargo_wrapper_dependency_audit::archive_inspector::inspect_archive;
-use cargo_wrapper_dependency_audit::factory_approvals::{FactoryApproval, FactoryBundle};
-use cargo_wrapper_dependency_audit::registry::MAX_ARCHIVE_BYTES;
-use cargo_wrapper_dependency_audit::scanner::SCANNER_VERSION;
-use cargo_wrapper_dependency_audit::{Result, error};
+use cargo_wrapper_supply_chain_guard::archive_inspector::inspect_archive;
+use cargo_wrapper_supply_chain_guard::factory_approvals::{FactoryApproval, FactoryBundle};
+use cargo_wrapper_supply_chain_guard::registry::MAX_ARCHIVE_BYTES;
+use cargo_wrapper_supply_chain_guard::scanner::SCANNER_VERSION;
+use cargo_wrapper_supply_chain_guard::{Result, error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -210,7 +210,7 @@ fn run() -> Result<()> {
     let bundle = FactoryBundle::from_approvals(
         format!("{reviewed_at}-factory"),
         reviewed_at,
-        "Exact crates.io artifacts locked by the selected source projects, checksum-verified and statically scanned by Dependency Audit; RustSec-flagged artifacts excluded".to_owned(),
+        "Exact crates.io artifacts locked by the selected source projects, checksum-verified and statically scanned by Supply Chain Guard; RustSec-flagged artifacts excluded".to_owned(),
         approvals,
     )?;
     let serialized_bundle = toml::to_string_pretty(&bundle)?;
@@ -298,7 +298,7 @@ fn append_report(path: &Path, report: &str) -> Result<()> {
     };
     let mut output = OpenOptions::new().create(true).append(true).open(path)?;
     if needs_header {
-        output.write_all(b"# Dependency Audit factory scan history\n\n")?;
+        output.write_all(b"# Supply Chain Guard factory scan history\n\n")?;
     } else {
         output.write_all(b"\n---\n\n")?;
     }
@@ -881,7 +881,7 @@ mod tests {
         append_report(&report_path, "## Second scan\n").unwrap();
 
         let report = fs::read_to_string(report_path).unwrap();
-        assert!(report.starts_with("# Dependency Audit factory scan history\n"));
+        assert!(report.starts_with("# Supply Chain Guard factory scan history\n"));
         assert_eq!(report.matches("## First scan").count(), 1);
         assert_eq!(report.matches("## Second scan").count(), 1);
         assert!(report.contains("\n---\n"));

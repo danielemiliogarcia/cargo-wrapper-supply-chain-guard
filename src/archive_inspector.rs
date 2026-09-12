@@ -110,7 +110,7 @@ pub fn inspect_archive_for_review(
     inspect_files(&files)
 }
 
-fn inspect_files(files: &BTreeMap<PathBuf, Vec<u8>>) -> Result<ArchiveInspection> {
+pub(crate) fn inspect_files(files: &BTreeMap<PathBuf, Vec<u8>>) -> Result<ArchiveInspection> {
     let manifest_bytes = files
         .get(Path::new("Cargo.toml"))
         .ok_or_else(|| error("crate archive has no normalized Cargo.toml"))?;

@@ -1,4 +1,4 @@
-//! Provides shared identities and review findings for registry artifacts.
+//! Provides shared identities and review findings for remote artifacts.
 //! These ordered data types connect scanning, prompting, and persistent approvals.
 
 use serde::{Deserialize, Serialize};
@@ -49,11 +49,23 @@ pub struct ArtifactId {
     pub checksum: String,
 }
 
+impl ArtifactId {
+    pub fn is_git(&self) -> bool {
+        self.source.starts_with("git+")
+    }
+
+    pub fn is_registry(&self) -> bool {
+        self.source.starts_with("registry+") || self.source.starts_with("sparse+")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ArtifactReview {
     pub artifact: ArtifactId,
     pub findings: BTreeSet<Finding>,
     pub sources: Vec<ReviewSource>,
+    /// Deterministic digest of the complete Git tree, when this is a Git artifact.
+    pub content_sha256: Option<String>,
 }
 
 impl ArtifactReview {

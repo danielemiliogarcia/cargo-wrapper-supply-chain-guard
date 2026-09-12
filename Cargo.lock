@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cargo-wrapper-dependency-audit"
+name = "cargo-wrapper-supply-chain-guard"
 version = "0.1.0"
 dependencies = [
  "flate2",

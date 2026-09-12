@@ -16,7 +16,7 @@ impl TestDirectory {
             .unwrap()
             .as_nanos();
         let path = env::temp_dir().join(format!(
-            "dependency-audit-protocol-{}-{nonce}",
+            "supply-chain-guard-protocol-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
@@ -31,7 +31,7 @@ impl Drop for TestDirectory {
 }
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_cargo-wrapper-plugin-dependency-audit")
+    env!("CARGO_BIN_EXE_cargo-wrapper-plugin-supply-chain-guard")
 }
 
 fn compile_fixture(directory: &Path) -> PathBuf {
@@ -73,7 +73,7 @@ fn hosted_command(executable: &Path) -> Command {
     let mut command = Command::new(binary());
     command
         .env("CARGO_WRAPPER_PLUGIN_PROTOCOL", "1")
-        .env("CARGO_WRAPPER_PLUGIN_NAME", "dependency-audit")
+        .env("CARGO_WRAPPER_PLUGIN_NAME", "supply-chain-guard")
         .env("CARGO_WRAPPER_REAL_CARGO", executable)
         .env("CARGO_WRAPPER_NEXT", executable);
     command
@@ -92,7 +92,7 @@ fn direct_execution_is_refused_but_version_and_help_are_read_only() {
     for argument in ["--version", "--help"] {
         let output = Command::new(binary()).arg(argument).output().unwrap();
         assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains("dependency-audit"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("supply-chain-guard"));
     }
 }
 
@@ -114,12 +114,12 @@ fn malformed_or_incompatible_protocol_fails_closed() {
         .output()
         .unwrap();
     assert!(!wrong_name.status.success());
-    assert!(stderr(&wrong_name).contains("expected \"dependency-audit\""));
+    assert!(stderr(&wrong_name).contains("expected \"supply-chain-guard\""));
 
     let relative_cargo = Command::new(binary())
         .arg("clean")
         .env("CARGO_WRAPPER_PLUGIN_PROTOCOL", "1")
-        .env("CARGO_WRAPPER_PLUGIN_NAME", "dependency-audit")
+        .env("CARGO_WRAPPER_PLUGIN_NAME", "supply-chain-guard")
         .env("CARGO_WRAPPER_REAL_CARGO", "relative-cargo")
         .env("CARGO_WRAPPER_NEXT", &fixture)
         .output()
@@ -130,7 +130,7 @@ fn malformed_or_incompatible_protocol_fails_closed() {
     let missing_next = Command::new(binary())
         .arg("clean")
         .env("CARGO_WRAPPER_PLUGIN_PROTOCOL", "1")
-        .env("CARGO_WRAPPER_PLUGIN_NAME", "dependency-audit")
+        .env("CARGO_WRAPPER_PLUGIN_NAME", "supply-chain-guard")
         .env("CARGO_WRAPPER_REAL_CARGO", &fixture)
         .output()
         .unwrap();
@@ -149,7 +149,7 @@ fn passthrough_preserves_arguments_reserved_environment_and_exit_status() {
         .env("DOWNSTREAM_EXIT", "37")
         .env(
             "CARGO_WRAPPER_PLUGIN_CHAIN",
-            "dependency-audit,later-plugin",
+            "supply-chain-guard,later-plugin",
         )
         .env("CARGO_WRAPPER_PLUGIN_INDEX", "1")
         .output()
@@ -159,8 +159,27 @@ fn passthrough_preserves_arguments_reserved_environment_and_exit_status() {
     assert!(
         trace.contains("args=[\"clean\", \"space value\", \"雪\", \"--\", \"--child-option\"]")
     );
-    assert!(trace.contains("chain=dependency-audit,later-plugin"));
+    assert!(trace.contains("chain=supply-chain-guard,later-plugin"));
     assert!(trace.contains("index=1"));
+}
+
+#[test]
+fn conflicting_dependency_guards_fail_before_downstream() {
+    let directory = TestDirectory::new();
+    let fixture = compile_fixture(&directory.0);
+    let trace = directory.0.join("trace");
+    let output = hosted_command(&fixture)
+        .arg("build")
+        .env("PROTOCOL_TRACE", &trace)
+        .env(
+            "CARGO_WRAPPER_PLUGIN_CHAIN",
+            "dependency-audit,supply-chain-guard",
+        )
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("cannot be enabled together"));
+    assert!(!trace.exists(), "downstream Cargo must not run");
 }
 
 #[test]
@@ -170,10 +189,10 @@ fn plugin_owned_status_never_calls_downstream() {
     let trace = directory.0.join("trace");
     let approval_file = directory.0.join("approvals.toml");
     let output = hosted_command(&fixture)
-        .arg("dependency-audit")
+        .arg("supply-chain-guard")
         .env("PROTOCOL_TRACE", &trace)
         .env(
-            "CARGO_WRAPPER_DEPENDENCY_AUDIT_APPROVAL_FILE",
+            "CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_APPROVAL_FILE",
             approval_file,
         )
         .output()
@@ -181,7 +200,7 @@ fn plugin_owned_status_never_calls_downstream() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!trace.exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Dependency Audit plugin is active"));
+    assert!(stdout.contains("Supply Chain Guard plugin is active"));
     assert!(stdout.contains("Protocol version: 1"));
 }
 
@@ -229,9 +248,9 @@ fn acknowledged_forceinstall_warns_strips_private_flag_and_calls_downstream_once
 
     assert!(output.status.success(), "{}", stderr(&output));
     let message = stderr(&output);
-    assert!(message.contains("DEPENDENCY AUDIT BYPASS: UNREVIEWED CARGO INSTALL"));
+    assert!(message.contains("SUPPLY CHAIN GUARD BYPASS: UNREVIEWED CARGO INSTALL"));
     assert!(message.contains("transitive dependency graph were not"));
-    assert!(message.contains("reviewed by Dependency Audit"));
+    assert!(message.contains("reviewed by Supply Chain Guard"));
 
     let trace = fs::read_to_string(trace).unwrap();
     assert!(trace.contains(

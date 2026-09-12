@@ -66,7 +66,7 @@ pub fn resolve_candidate(
     let status = runner.run(&args, &working_directory, Some(&cargo_home))?;
     if !status.success() {
         return Err(error(format!(
-            "dependency-audit: isolated candidate `cargo {real_command}` failed with status {status}"
+            "supply-chain-guard: isolated candidate `cargo {real_command}` failed with status {status}"
         )));
     }
     assert_no_downloaded_source(&cargo_home)?;
@@ -140,12 +140,10 @@ fn assert_no_downloaded_source(cargo_home: &Path) -> Result<()> {
     for path in [
         cargo_home.join("registry/cache"),
         cargo_home.join("registry/src"),
-        cargo_home.join("git/checkouts"),
-        cargo_home.join("git/db"),
     ] {
         if path.exists() && directory_has_files(&path)? {
             return Err(error(format!(
-                "dependency-audit: candidate resolution exposed dependency source at {}; aborting because this Cargo behavior violates the index-only boundary",
+                "supply-chain-guard: candidate resolution exposed registry dependency source at {}; aborting because this Cargo behavior violates the registry index-only boundary",
                 path.display()
             )));
         }
@@ -165,7 +163,7 @@ fn directory_has_files(path: &Path) -> Result<bool> {
     Ok(false)
 }
 
-fn copy_local_workspace(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn copy_local_workspace(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -178,7 +176,7 @@ fn copy_local_workspace(source: &Path, destination: &Path) -> Result<()> {
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
             return Err(error(format!(
-                "dependency-audit: refusing to mirror workspace symlink {} during candidate resolution",
+                "supply-chain-guard: refusing to mirror workspace symlink {} during candidate resolution",
                 source_path.display()
             )));
         }
@@ -204,7 +202,13 @@ impl TemporaryDirectory {
         for attempt in 0..100u32 {
             let path = std::env::temp_dir()
                 .join(format!("{prefix}-{}-{nonce}-{attempt}", std::process::id()));
-            match fs::create_dir(&path) {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(create_error) if create_error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(create_error) => return Err(create_error.into()),
@@ -302,5 +306,17 @@ mod tests {
             "old"
         );
         assert!(!directory.path().join("Cargo.lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_temporary_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TemporaryDirectory::new("cargo-wrapper-permission-test").unwrap();
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }

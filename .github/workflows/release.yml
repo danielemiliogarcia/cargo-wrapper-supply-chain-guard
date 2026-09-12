@@ -26,12 +26,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: recursive
+      - name: Verify pinned cargo-vet source
+        shell: bash
+        run: |
+          test "$(git -C third-party/cargo-vet rev-parse HEAD)" = "e496a28a2cde71db0d98ef631cf4586f89a7fed6"
+      - name: Build pinned cargo-vet helper
+        run: cargo build --manifest-path third-party/cargo-vet/Cargo.toml --locked --release
+      - name: Reproduce curated audit baseline
+        env:
+          SUPPLY_CHAIN_GUARD_CARGO_VET: ${{ github.workspace }}/third-party/cargo-vet/target/release/cargo-vet
+        run: cargo run --locked --example generate_curated_audits -- --check
+      - name: Test real cargo-vet evidence and no-execution canary
+        env:
+          SUPPLY_CHAIN_GUARD_RUN_REAL_VET_TEST: "1"
+          SUPPLY_CHAIN_GUARD_TEST_CARGO_VET: ${{ github.workspace }}/third-party/cargo-vet/target/release/cargo-vet
+        run: cargo test --locked vet::tests::pinned_real_cargo_vet_resolves_full_and_delta_evidence_without_executing_code -- --nocapture
       - name: Test
         run: cargo test --all-targets --locked
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Smoke-test Linux release bundle installer
+        run: |
+          CARGO=cargo ./scripts/build-release-bundle.sh x86_64-unknown-linux-gnu
+          ./scripts/ci-install-smoke.sh x86_64-unknown-linux-gnu
 
   plan:
     needs: verify
@@ -106,6 +126,13 @@ jobs:
         run: |
           dist build "${{ needs.plan.outputs.tag-flag }}" --print=linkage \
             --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
+          for target in ${{ join(matrix.targets, ' ') }}; do
+            ./scripts/build-release-bundle.sh "$target"
+          done
+      - name: Smoke-test Windows installer
+        if: ${{ contains(matrix.targets, 'x86_64-pc-windows-msvc') }}
+        shell: pwsh
+        run: ./scripts/ci-install-smoke.ps1 x86_64-pc-windows-msvc
       - id: built
         name: Collect artifacts
         shell: bash
@@ -113,6 +140,9 @@ jobs:
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           dist print-upload-files-from-manifest \
             --manifest dist-manifest.json >> "$GITHUB_OUTPUT"
+          find target/distrib -maxdepth 1 -type f \
+            \( -name 'cargo-wrapper-supply-chain-guard-bundle-*' -o -name 'cargo-wrapper-supply-chain-guard-bundle-*.sha256' -o -name 'INSTALL-MANIFEST-*.toml' \) \
+            -print >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: Upload platform artifacts
@@ -158,6 +188,12 @@ jobs:
             --output-format=json --artifacts=global > dist-manifest.json
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
           jq --raw-output '.upload_files[]' dist-manifest.json >> "$GITHUB_OUTPUT"
+          cp install.sh uninstall.sh install.ps1 uninstall.ps1 target/distrib/
+          printf '%s\n' \
+            target/distrib/install.sh \
+            target/distrib/uninstall.sh \
+            target/distrib/install.ps1 \
+            target/distrib/uninstall.ps1 >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: Upload global artifacts

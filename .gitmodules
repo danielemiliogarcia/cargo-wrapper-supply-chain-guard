@@ -1,0 +1,3 @@
+[submodule "third-party/cargo-vet"]
+	path = third-party/cargo-vet
+	url = https://github.com/mozilla/cargo-vet.git

@@ -1,4 +1,4 @@
-//! Fetches bounded sparse-registry metadata and verified crate archives.
+//! Fetches bounded registry metadata, crate archives, and immutable GitHub archives.
 //! It derives pre-download findings from dependency metadata and build-time closure.
 
 use crate::findings::{ArtifactId, Finding};
@@ -6,6 +6,7 @@ use crate::lockfile::{CargoLock, LockPackage};
 use crate::{Result, error};
 use semver::{Version, VersionReq};
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read;
 use std::time::Duration;
@@ -36,10 +37,17 @@ pub struct IndexVersion {
 pub trait RegistryClient {
     fn index_version(&self, artifact: &ArtifactId) -> Result<IndexVersion>;
     fn download_archive(&self, artifact: &ArtifactId) -> Result<Vec<u8>>;
+    fn download_git_archive(&self, artifact: &ArtifactId) -> Result<Vec<u8>> {
+        Err(error(format!(
+            "Git archive retrieval is unavailable for {} {}",
+            artifact.name, artifact.version
+        )))
+    }
 }
 
 pub struct HttpRegistryClient {
     agent: ureq::Agent,
+    git_archives: RefCell<BTreeMap<String, Vec<u8>>>,
 }
 
 impl Default for HttpRegistryClient {
@@ -51,6 +59,7 @@ impl Default for HttpRegistryClient {
                 .timeout_write(Duration::from_secs(10))
                 .redirects(5)
                 .build(),
+            git_archives: RefCell::new(BTreeMap::new()),
         }
     }
 }
@@ -75,7 +84,7 @@ impl HttpRegistryClient {
                     .to_owned())
             }
             _ => Err(error(format!(
-                "dependency-audit: registry source is not a supported sparse registry: {source}"
+                "supply-chain-guard: registry source is not a supported sparse registry: {source}"
             ))),
         }
     }
@@ -83,14 +92,14 @@ impl HttpRegistryClient {
     fn get_bounded(&self, url: &str, maximum: u64) -> Result<Vec<u8>> {
         let response = self.agent.get(url).call().map_err(|request_error| {
             error(format!(
-                "registry request failed for {url}: {request_error}"
+                "remote source request failed for {url}: {request_error}"
             ))
         })?;
         if let Some(length) = response.header("Content-Length")
             && length.parse::<u64>().unwrap_or(maximum + 1) > maximum
         {
             return Err(error(format!(
-                "registry response exceeds {maximum} byte limit"
+                "remote source response exceeds {maximum} byte limit"
             )));
         }
         let mut bytes = Vec::new();
@@ -100,7 +109,7 @@ impl HttpRegistryClient {
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > maximum {
             return Err(error(format!(
-                "registry response exceeds {maximum} byte limit"
+                "remote source response exceeds {maximum} byte limit"
             )));
         }
         Ok(bytes)
@@ -175,6 +184,24 @@ impl RegistryClient for HttpRegistryClient {
         };
         self.get_bounded(&url, MAX_ARCHIVE_BYTES)
     }
+
+    fn download_git_archive(&self, artifact: &ArtifactId) -> Result<Vec<u8>> {
+        let source = crate::git_source::GitHubSource::parse(&artifact.source)
+            .map_err(|reason| error(format!("cannot retrieve Git dependency: {reason}")))?;
+        if source.commit != artifact.checksum {
+            return Err(error(format!(
+                "GIT INTEGRITY FAILURE: locked source commit and artifact identity differ for {} {}",
+                artifact.name, artifact.version
+            )));
+        }
+        let url = source.archive_url();
+        if let Some(bytes) = self.git_archives.borrow().get(&url) {
+            return Ok(bytes.clone());
+        }
+        let bytes = self.get_bounded(&url, MAX_ARCHIVE_BYTES)?;
+        self.git_archives.borrow_mut().insert(url, bytes.clone());
+        Ok(bytes)
+    }
 }
 
 #[derive(Deserialize)]
@@ -197,7 +224,11 @@ pub fn load_index_metadata(
     client: &dyn RegistryClient,
 ) -> Result<BTreeMap<ArtifactId, IndexVersion>> {
     let mut result = BTreeMap::new();
-    for artifact in lock.remote_artifacts()? {
+    for artifact in lock
+        .remote_artifacts()?
+        .into_iter()
+        .filter(ArtifactId::is_registry)
+    {
         result.insert(artifact.clone(), client.index_version(&artifact)?);
     }
     Ok(result)
@@ -205,6 +236,7 @@ pub fn load_index_metadata(
 
 pub fn stage_one_findings(
     lock: &CargoLock,
+    artifacts: &[ArtifactId],
     metadata: &BTreeMap<ArtifactId, IndexVersion>,
     local_build_dependencies: &BTreeSet<String>,
 ) -> BTreeMap<ArtifactId, BTreeSet<Finding>> {
@@ -219,8 +251,8 @@ pub fn stage_one_findings(
         "attohttpc",
     ];
     let packages = lock.package.as_deref().unwrap_or_default();
-    let artifact_by_package: BTreeMap<(&str, &str, &str), &ArtifactId> = metadata
-        .keys()
+    let artifact_by_package: BTreeMap<(&str, &str, &str), &ArtifactId> = artifacts
+        .iter()
         .map(|artifact| {
             (
                 (
@@ -415,7 +447,8 @@ checksum="c"
                 },
             );
         }
-        let findings = stage_one_findings(&lock, &metadata, &BTreeSet::new());
+        let artifacts = lock.remote_artifacts().unwrap();
+        let findings = stage_one_findings(&lock, &artifacts, &metadata, &BTreeSet::new());
         let reqwest = findings
             .iter()
             .find(|(artifact, _)| artifact.name == "reqwest")
