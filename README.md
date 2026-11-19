@@ -5,6 +5,8 @@ Supply Chain Guard is a pre-execution supply-chain firewall for Cargo Wrapper. I
 
 The plugin is registered as `supply-chain-guard` and distributed as `cargo-wrapper-plugin-supply-chain-guard[.exe]`.
 
+New to Cargo Wrapper? The [hands-on guide](https://github.com/danielemiliogarcia/cargowrapper/blob/fork-main/TRY-IT.md) walks through the whole flow in a throwaway shell, including `cargo forceadd` and this plugin's review, without installing anything.
+
 This project preserves the scanner and transaction protections derived from [Cargo Wrapper Dependency Audit](https://github.com/danielemiliogarcia/cargo-wrapper-dependency-audit), with an independent product identity, trust state, release history, and cargo-vet evidence policy.
 
 ## What it protects
