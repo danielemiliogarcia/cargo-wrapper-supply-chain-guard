@@ -18,6 +18,9 @@ targets = [
     "x86_64-pc-windows-msvc",
 ]
 
+# macos-14 can no longer be provisioned by GitHub; build arm64 macOS on macos-15.
+github-custom-runners = { aarch64-apple-darwin = "macos-15" }
+
 install-updater = false
 
 # Attest the complete release set, including archives and checksum files.
