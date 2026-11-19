@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cargo_wrapper_supply_chain_guard::age_policy_hint::warn_if_policy_is_hidden;
 use cargo_wrapper_supply_chain_guard::approvals::ApprovalStore;
 use cargo_wrapper_supply_chain_guard::candidate::{
     WorkspaceSnapshot, locks_match, resolve_candidate,
@@ -610,6 +611,7 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
         || invocation.policy == CommandPolicy::ReviewedDependencyRemoval
     {
         let root = project_root(&workspace_start)?;
+        warn_if_policy_is_hidden(protocol.direct_cargo.executable(), &root);
         let candidate = resolve_candidate(&protocol.direct_cargo, &root, &cwd, &args, &invocation)?;
         let candidate_workspace = Workspace::discover(&candidate.workspace_root)?;
         let candidate_lock = candidate.lock()?;

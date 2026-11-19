@@ -51,7 +51,7 @@ If you prefer source because you audited it and do not trust a binary, build in 
 Download `install.sh`, inspect it, and verify its GitHub attestation before executing it:
 
 ```sh
-version=0.1.1
+version=0.2.0
 gh attestation verify install.sh \
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
@@ -77,7 +77,7 @@ CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL=file:///absolute/path/to/target/di
 Download and inspect `install.ps1`, verify its GitHub attestation, then run:
 
 ```powershell
-$Version = "0.1.1"
+$Version = "0.2.0"
 gh attestation verify .\install.ps1 `
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard `
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml `
@@ -255,6 +255,8 @@ export CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE="30 days"
 ```
 
 Supply Chain Guard resolves its candidate lockfile in a private `CARGO_HOME` and a temporary copy of the project (see [HOW_IT_WORKS.md](HOW_IT_WORKS.md)). That resolution therefore sees the environment variable and the project's own `.cargo/config.toml`, but it does not see `~/.cargo/config.toml` or any `.cargo/config.toml` in directories above the project. A policy that lives only in those places is applied by the final Cargo run but not by the candidate resolution, which can produce a lockfile mismatch (the operation is rolled back) or a review of different versions than the ones finally locked. Use the project file, the environment variable, or both.
+
+When a guarded operation starts, Supply Chain Guard prints a warning (never an error) if Cargo is 1.100 or newer, `CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE` is unset, the project's `.cargo/config.toml` does not set `registry.global-min-publish-age` or `registries.crates-io.min-publish-age`, and `$CARGO_HOME/config.toml` does. Set the environment variable or add the setting to the project file to silence it. Policies that live only in directories above the project are not detected.
 
 ### Cargo 1.99 and older
 
