@@ -10,6 +10,8 @@ Yes, but this first pass only calculates the proposed dependency graph. Before i
 
 Cargo can read registry index records and create a candidate `Cargo.lock` during this pass, but dependency code is not compiled or executed: build scripts and procedural macros do not run. Supply Chain Guard verifies that Cargo did not place registry archives or extracted registry source in the isolated Cargo home. Cargo may fetch a Git repository into that disposable home because it cannot resolve a Git package's name, version, and dependency edges from a registry index. That private fetch is never built or executed, never enters the real project or normal Cargo home, and is deleted with the candidate directory.
 
+Because of this isolation, the candidate resolution sees only some minimum-publish-age configuration sources. It inherits the parent environment, so `CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE` is visible; it works in a copy of the project, so the project's own `.cargo/config.toml` is visible. It does not see `~/.cargo/config.toml` (the Cargo home is redirected) or a `.cargo/config.toml` in a directory above the project root (the copy lives in a temporary directory). Set the policy in the environment or the project to keep candidate and final resolution consistent.
+
 This is process-state isolation, not a VM or operating-system sandbox. It prevents normal dependency resolution from exposing the real workspace or Cargo cache to unreviewed source; it is not intended to contain a vulnerability in Cargo itself.
 
 ## Can rust-analyzer react to candidate resolution?
