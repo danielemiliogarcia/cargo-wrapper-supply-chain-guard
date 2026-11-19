@@ -2,7 +2,7 @@
 # Installs a verified precompiled Supply Chain Guard bundle and registers it disabled.
 set -eu
 
-version=${CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION:-0.2.0}
+version=${CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION:-0.2.1}
 base_url=${CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL:-"https://github.com/danielemiliogarcia/cargo-wrapper-supply-chain-guard/releases/download/v$version"}
 attestation_repository=danielemiliogarcia/cargo-wrapper-supply-chain-guard
 attestation_workflow=danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml

@@ -5,6 +5,8 @@ Supply Chain Guard is a pre-execution supply-chain firewall for Cargo Wrapper. I
 
 The plugin is registered as `supply-chain-guard` and distributed as `cargo-wrapper-plugin-supply-chain-guard[.exe]`.
 
+New to Cargo Wrapper? The [hands-on guide](https://github.com/danielemiliogarcia/cargowrapper/blob/fork-main/TRY-IT.md) walks through the whole flow in a throwaway folder, including `cargo forceadd` and this plugin's review, without installing anything.
+
 This project preserves the scanner and transaction protections derived from [Cargo Wrapper Dependency Audit](https://github.com/danielemiliogarcia/cargo-wrapper-dependency-audit), with an independent product identity, trust state, release history, and cargo-vet evidence policy.
 
 ## What it protects
@@ -51,7 +53,7 @@ If you prefer source because you audited it and do not trust a binary, build in 
 Download `install.sh`, inspect it, and verify its GitHub attestation before executing it:
 
 ```sh
-version=0.2.0
+version=0.2.1
 gh attestation verify install.sh \
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
@@ -77,7 +79,7 @@ CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL=file:///absolute/path/to/target/di
 Download and inspect `install.ps1`, verify its GitHub attestation, then run:
 
 ```powershell
-$Version = "0.2.0"
+$Version = "0.2.1"
 gh attestation verify .\install.ps1 `
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard `
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml `

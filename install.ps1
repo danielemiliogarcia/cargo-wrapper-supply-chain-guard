@@ -1,6 +1,6 @@
 # Installs a verified Windows Supply Chain Guard bundle and registers it disabled.
 $ErrorActionPreference = "Stop"
-$Version = if ($env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION) { $env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION } else { "0.2.0" }
+$Version = if ($env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION) { $env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_VERSION } else { "0.2.1" }
 $BaseUrl = if ($env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL) { $env:CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL } else { "https://github.com/danielemiliogarcia/cargo-wrapper-supply-chain-guard/releases/download/v$Version" }
 $AttestationRepository = "danielemiliogarcia/cargo-wrapper-supply-chain-guard"
 $AttestationWorkflow = "danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml"
