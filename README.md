@@ -234,9 +234,31 @@ cargo forceinstall <package-name> --accept-unreviewed-install-risk
 
 The plugin displays a prominent warning, removes its private flag, and invokes downstream `cargo install --locked`. It creates no approvals.
 
+The `--locked` flag matters on older Cargo: up to Cargo 1.99, `cargo install` ignores the package's published `Cargo.lock` unless `--locked` is passed. Cargo 1.100 uses the packaged lockfile by default, and `--locked` does not change dependency resolution for `cargo install` there (it only warns if no lockfile is packaged). Either way, do not rely on minimum publish age for `cargo install`, and treat a forced install as unreviewed.
+
 ## Plugin interaction
 
-Cargo Wrapper protocol v1 orders plugins by name. `age-policy` runs before `supply-chain-guard`, so it selects old-enough versions first and Supply Chain Guard scans and vets those exact versions. Do not enable `dependency-audit` and `supply-chain-guard` together; startup rejects the duplicate guard chain with instructions to disable one.
+Cargo Wrapper protocol v1 orders plugins by name, so any plugin named `age-policy` runs before `supply-chain-guard`. Do not enable `dependency-audit` and `supply-chain-guard` together; startup rejects the duplicate guard chain with instructions to disable one.
+
+### Cargo 1.100 and newer
+
+Do not install the `age-policy` plugin. Cargo 1.100 enforces minimum publish age natively, so configure Cargo instead, with a checked-in `.cargo/config.toml` and/or an environment variable:
+
+```toml
+# .cargo/config.toml in the project
+[registry]
+global-min-publish-age = "30 days"
+```
+
+```sh
+export CARGO_REGISTRY_GLOBAL_MIN_PUBLISH_AGE="30 days"
+```
+
+Supply Chain Guard resolves its candidate lockfile in a private `CARGO_HOME` and a temporary copy of the project (see [HOW_IT_WORKS.md](HOW_IT_WORKS.md)). That resolution therefore sees the environment variable and the project's own `.cargo/config.toml`, but it does not see `~/.cargo/config.toml` or any `.cargo/config.toml` in directories above the project. A policy that lives only in those places is applied by the final Cargo run but not by the candidate resolution, which can produce a lockfile mismatch (the operation is rolled back) or a review of different versions than the ones finally locked. Use the project file, the environment variable, or both.
+
+### Cargo 1.99 and older
+
+Native configuration is silently ignored (or nightly-only), so install the legacy `age-policy` plugin, which selects old-enough versions first; Supply Chain Guard then scans and vets those exact versions.
 
 ## Uninstall
 
@@ -299,7 +321,7 @@ SUPPLY_CHAIN_GUARD_CARGO_VET="$PWD/target/cargo-vet-helper/release/cargo-vet" \
   cargo run --locked --example generate_curated_audits -- --check
 ```
 
-See [SBX-TESTING.md](SBX-TESTING.md) for the disposable Docker `sbx` workflow, [THREAT_MODEL.md](THREAT_MODEL.md) for boundaries, [MIGRATING-FROM-DEPENDENCY-AUDIT.md](MIGRATING-FROM-DEPENDENCY-AUDIT.md) for migration, and [RELEASING.md](RELEASING.md) for release procedure.
+See [THREAT_MODEL.md](THREAT_MODEL.md) for boundaries, [MIGRATING-FROM-DEPENDENCY-AUDIT.md](MIGRATING-FROM-DEPENDENCY-AUDIT.md) for migration, and [RELEASING.md](RELEASING.md) for release procedure.
 
 ## License
 
