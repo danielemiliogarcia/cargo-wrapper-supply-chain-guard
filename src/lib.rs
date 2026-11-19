@@ -1,6 +1,7 @@
 //! Security analysis and transaction engine for the Supply Chain Guard plugin.
 //! Host protocol parsing and executable dispatch remain isolated from these modules.
 
+pub mod age_policy_hint;
 pub mod approvals;
 pub mod archive_inspector;
 pub mod candidate;
