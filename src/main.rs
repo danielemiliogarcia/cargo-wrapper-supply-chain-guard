@@ -567,6 +567,9 @@ fn plugin_main(protocol: ProtocolContext) -> AuditResult<i32> {
     if invocation.policy == CommandPolicy::InstallRequiresRiskAcceptance {
         if install_risk_accepted {
             args[invocation.command_index] = "install".to_owned();
+            // Keep `--locked`: on Cargo 1.100+ it does nothing for `install` (the packaged
+            // Cargo.lock is already used by default), but on Cargo <=1.99 the packaged
+            // lockfile is ignored without it. The wrapper still serves those versions.
             add_locked(&mut args, invocation.command_index);
             announce_unreviewed_install_bypass();
             return run_downstream(&protocol, &args, &env::current_dir()?);
