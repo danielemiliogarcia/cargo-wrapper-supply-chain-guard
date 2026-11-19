@@ -1,7 +1,8 @@
 [package]
 name = "cargo-wrapper-supply-chain-guard"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
+rust-version = "1.100"
 license = "MIT"
 description = "Pre-execution supply-chain guard plugin for Cargo Wrapper"
 repository = "https://github.com/danielemiliogarcia/cargo-wrapper-supply-chain-guard"
