@@ -53,7 +53,7 @@ If you prefer source because you audited it and do not trust a binary, build in 
 Download `install.sh`, inspect it, and verify its GitHub attestation before executing it:
 
 ```sh
-version=0.2.1
+version=0.2.2
 gh attestation verify install.sh \
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
@@ -79,7 +79,7 @@ CARGO_WRAPPER_SUPPLY_CHAIN_GUARD_DOWNLOAD_URL=file:///absolute/path/to/target/di
 Download and inspect `install.ps1`, verify its GitHub attestation, then run:
 
 ```powershell
-$Version = "0.2.1"
+$Version = "0.2.2"
 gh attestation verify .\install.ps1 `
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard `
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml `

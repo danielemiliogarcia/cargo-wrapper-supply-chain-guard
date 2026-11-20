@@ -71,8 +71,8 @@ A single host cannot natively produce and validate all five binaries. The GitHub
 3. Review the plan, commit the release, and push a matching annotated tag:
 
    ```sh
-   git tag -a v0.2.1 -m "Supply Chain Guard 0.2.1"
-   git push origin v0.2.1
+   git tag -a v0.2.2 -m "Supply Chain Guard 0.2.2"
+   git push origin v0.2.2
    ```
 
 The workflow publishes only tags shaped like `vMAJOR.MINOR.PATCH`. Any verification, build, packaging, or attestation failure prevents publication. Target-specific `INSTALL-MANIFEST-<target>.toml` files are published separately as well as inside their bundles so GitHub can attest each manifest directly.
@@ -88,7 +88,7 @@ gh attestation verify \
   cargo-wrapper-supply-chain-guard-bundle-x86_64-unknown-linux-gnu.tar.xz \
   --repo danielemiliogarcia/cargo-wrapper-supply-chain-guard \
   --signer-workflow danielemiliogarcia/cargo-wrapper-supply-chain-guard/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.2.1 \
+  --source-ref refs/tags/v0.2.2 \
   --deny-self-hosted-runners
 ```
 
